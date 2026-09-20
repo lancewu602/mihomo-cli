@@ -9,7 +9,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 from core import TEST_URL, api, api_raw, bad, die, dim, ok, pad, proxy_port, width
-from kernel import GROUP_TYPES, current_node, node_delay, probe
+from kernel import GROUP_TYPES, current_node, node_delay, probe, provider_nodes, provider_of
 
 # url-test / fallback 这些是"自己测速挑"，跟 select 的"手动选"区别就在这
 AUTO_TYPES = {"URLTest", "Fallback", "LoadBalance", "Relay"}
@@ -57,6 +57,39 @@ def resolve_option(want: str, opts: list[str]) -> str:
     hint = (hits or opts)[:12]
     die(f"没找到选项「{want}」"
         + ("，像的有：\n  " + "\n  ".join(hint) if hits else "\n  可选：\n  " + "\n  ".join(hint)))
+
+
+def delays_for(opts: list[str]) -> dict[str, int | None]:
+    """一批选项的测速结果 {选项: 毫秒 或 None}。
+
+    订阅节点交给内核的 provider healthcheck：一次请求把整个订阅测一遍，又快又对——
+    1.19.26 起 /proxies/<订阅节点>/delay 已经返回 404（订阅节点从 /proxies 里搬走了）。
+    其余选项（策略组、内联代理、DIRECT 这类）还是逐个问 /proxies/<名字>/delay。
+    """
+    out: dict[str, int | None] = {}
+    by_provider: dict[str, list[str]] = {}
+    others: list[str] = []
+    for o in opts:
+        if pname := provider_of(o):
+            by_provider.setdefault(pname, []).append(o)
+        else:
+            others.append(o)
+
+    q = urllib.parse.urlencode({"url": TEST_URL, "timeout": DELAY_TIMEOUT_MS})
+    for pname, nodes in by_provider.items():
+        path = f"/providers/proxies/{urllib.parse.quote(pname, safe='')}"
+        api_raw(f"{path}/healthcheck?{q}", timeout=60)
+        detail = provider_nodes(pname)
+        for n in nodes:
+            d = detail.get(n) or {}
+            hist = d.get("history") or []
+            delay = hist[-1].get("delay") if hist else None
+            # 内核报 0 或 alive=false 的都算不通，否则 0 会被排到最前面
+            out[n] = delay if (delay and delay > 0 and d.get("alive", True)) else None
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for n, d in zip(others, pool.map(delay_of, others)):
+            out[n] = d
+    return out
 
 
 def delay_of(name: str) -> int | None:
@@ -128,11 +161,12 @@ def test_group(name: str, g: dict) -> int:
         return 0
 
     opts = g.get("all") or []
-    print(dim(f"  逐个测 {len(opts)} 个（{WORKERS} 并发，每个最多 {DELAY_TIMEOUT_MS // 1000} 秒）…"))
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        results = list(pool.map(delay_of, opts))
-    ok_pairs = sorted((d, n) for d, n in zip(results, opts) if d is not None)
-    dead = [n for d, n in zip(results, opts) if d is None]
+    n_prov = sum(1 for o in opts if provider_of(o))
+    print(dim(f"  测 {len(opts)} 个（订阅节点 {n_prov} 个由内核整批测，"
+              f"其余逐个测，{WORKERS} 并发）…"))
+    delays = delays_for(opts)
+    ok_pairs = sorted((d, n) for n, d in delays.items() if d)
+    dead = [n for n in opts if not delays.get(n)]
     now = g.get("now")
     for d, n in ok_pairs:
         print(f"  {ok(f'{d:>5d} ms')}  {opts.index(n) + 1:>4}  {n}"

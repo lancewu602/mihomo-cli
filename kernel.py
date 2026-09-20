@@ -39,11 +39,52 @@ def mihomo_pid() -> str | None:
 GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
 
 
+def providers() -> dict[str, dict]:
+    """内核里所有 provider（订阅的 + 内置那几个 Compatible 的）。老内核没这接口就空。"""
+    return (api("/providers/proxies") or {}).get("providers") or {}
+
+
+_PROVIDER_OF: dict[str, str] = {}
+
+
+def provider_of(node: str) -> str | None:
+    """这个节点属于哪个 provider。
+
+    1.19.26 起订阅节点不再出现在 /proxies 里（/proxies/<订阅节点> 直接 404），
+    只能从 provider 这边找。进程内缓存，免得每个节点问一次。
+    """
+    if not _PROVIDER_OF:
+        for pname, p in providers().items():
+            for n in p.get("proxies") or []:
+                if isinstance(n, dict) and n.get("name"):
+                    _PROVIDER_OF.setdefault(n["name"], pname)
+    return _PROVIDER_OF.get(node)
+
+
+def provider_nodes(provider: str) -> dict[str, dict]:
+    """{节点名: 详情}。订阅节点的测速历史藏在 extra[<测速地址>].history 里，不是顶层 history。"""
+    data = api(f"/providers/proxies/{urllib.parse.quote(provider, safe='')}")
+    out: dict[str, dict] = {}
+    for p in (data or {}).get("proxies") or []:
+        name = p.get("name")
+        if not name:
+            continue
+        hist, alive = [], p.get("alive", True)
+        for info in (p.get("extra") or {}).values():
+            if info.get("history"):
+                hist, alive = info["history"], info.get("alive", alive)
+        out[name] = {"history": hist, "alive": alive}
+    return out
+
+
 def node_delay(name: str) -> int | None:
-    """某个节点的最近一次测速延迟（毫秒）；没有历史数据返回 None。"""
+    """某个节点/组的最近一次测速延迟（毫秒）。没有数据、或内核报 0（等于没测到）返回 None。"""
     detail = api(f"/proxies/{urllib.parse.quote(name, safe='')}")
+    if detail is None and (pname := provider_of(name)):
+        detail = provider_nodes(pname).get(name)
     hist = (detail or {}).get("history") or []
-    return hist[-1].get("delay") if hist else None
+    delay = hist[-1].get("delay") if hist else None
+    return delay if delay else None
 
 
 def current_node() -> tuple[list[str], int | None] | None:
@@ -296,8 +337,11 @@ def find_log_file() -> tuple[Path | None, str]:
     if pid and shutil.which("lsof"):
         p = run("lsof", "-p", pid, "-a", "-d", "1,2", "-Fn")
         for line in p.stdout.splitlines():
-            if line.startswith("n") and not line[1:].startswith(("/dev/", "pipe", "socket")):
-                return Path(line[1:]), f"内核进程 PID {pid} 的输出"
+            # 只认绝对路径：重定向到文件时这里是个真路径；交给 journald/管道/tty 时
+            # lsof 给的是 "type=STREAM" 这种占位（Debian + systemd 上实测），别当路径用
+            name = line[1:] if line.startswith("n") else ""
+            if name.startswith("/") and not name.startswith("/dev/"):
+                return Path(name), f"内核进程 PID {pid} 的输出"
     if not IS_MACOS and (mgr := service_manager()) and mgr[0] == "systemd":
         # Linux：unit 若写了 StandardOutput=append:/path 就还是文件（照样没人轮转）
         p = run("systemctl", "show", "-p", "StandardOutput", "-p", "StandardError", SERVICE_NAME)
@@ -313,7 +357,8 @@ def find_log_file() -> tuple[Path | None, str]:
         guess = Path(MIHOMO_BIN).parent.parent / "var/log/mihomo.log"
         if guess.exists():
             return guess, "按内核路径推出来的"
-    return None, "没找到（内核没在跑，也不是 brew 装的？）"
+    return None, ("没找到文件（Linux 上多半交给 journald 了）" if not IS_MACOS
+                  else "没找到（内核没在跑，也不是 brew 装的？）")
 
 
 def truncate_log() -> str:
