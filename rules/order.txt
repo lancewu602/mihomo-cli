@@ -22,6 +22,7 @@ reject/BanEasyPrivacy.list            全球拦截
 reject/Custom.list                    全球拦截
 
 # ── 直连 ──
+# 注：GoogleFCM.list 上游头部写「数量：35条」，实际 44 条（18 DOMAIN + 26 IP-CIDR）
 direct/GoogleFCM.list                 全球直连
 direct/GoogleCN.list                  全球直连
 direct/Apple.list                     全球直连
@@ -33,6 +34,9 @@ direct/ChinaDomain.list               全球直连
 direct/ChinaCompanyIp.list            全球直连
 
 # ── 代理 ──
+# 注：ChinaMedia.list 和 ProxyMedia.list 上游各含 1 条 URL-REGEX，
+#     mihomo 不支持这种类型（写进配置会让整份加载失败），构建时会跳过并告警。
+#     文件本身保持上游原文，不手工删——这样镜像能直接和上游 diff。
 proxy/Telegram.list                   节点选择
 proxy/ProxyMedia.list                 节点选择
 proxy/Custom.list                     节点选择

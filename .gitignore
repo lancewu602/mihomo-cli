@@ -12,3 +12,6 @@ venv/
 # 自己的 Custom.list 和 order.txt 要跟踪，所以下面单独放行
 rules/*/*.list
 !rules/*/Custom.list
+
+# geodata（geoip.metadb 等）：GPL 的第三方数据，用 mihomo-cli rules fetch 拉
+geodata/

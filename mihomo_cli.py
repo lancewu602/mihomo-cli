@@ -3,19 +3,27 @@
 """
 mihomo-cli —— 管 macOS 系统代理，以及把 rules/ 目录应用到 mihomo 配置。
 
-    mihomo-cli nics               列出所有网卡（start/stop 的参数就是它）
-    mihomo-cli start  [网卡名]     开系统代理；不传则用当前活跃网卡（没有就失败）
-    mihomo-cli stop   [网卡名]     关系统代理；不传则关掉之前 start 过的
+    mihomo-cli nics               列出所有网卡（start/stop 的参数就是它）【仅 macOS】
+    mihomo-cli start  [网卡名]     开系统代理；不传则用当前活跃网卡（没有就失败）【仅 macOS】
+    mihomo-cli stop   [网卡名]     关系统代理；不传则关掉之前 start 过的【仅 macOS】
     mihomo-cli status [网卡名]     看状态（不带任何参数时的默认动作）
 
     mihomo-cli rules order        片段顺序、各段规则数、多少条会被前面的片段吃掉
+    mihomo-cli rules fetch        从 ACL4SSR 拉 18 个片段、从 meta-rules-dat 拉 geodata
+                                  （--dry-run 只看，--geodata 连数据文件一起更新）
     mihomo-cli rules diff         对比 rules/ 树与现网 config.yaml（只读，不写文件）
     mihomo-cli rules apply        写 config.yaml：备份 → 写 → mihomo -t 校验 → 失败回滚
                                   加 --reload 让运行中的内核立即生效
+    mihomo-cli rules rollback     回滚到某个备份（--list 只看，--to 指定，默认最近一个）
 
 网卡名带空格要加引号：mihomo-cli start "USB 10/100 LAN"
 
-零第三方依赖，只用标准库。内核本身由 brew services 常驻，
+系统代理开关靠 macOS 的 networksetup，所以 nics/start/stop 仅 macOS；
+Linux（Debian 等）上 rules 那一套完全可用。配置目录默认会探测：
+~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo、/usr/local/etc/mihomo…，
+也可用 MIHOMO_DIR 指定。
+
+零第三方依赖，只用标准库。内核本身由 brew services / systemd 常驻，
 本脚本只管「系统代理」开关和规则生成，不启停 mihomo 进程。
 """
 
@@ -39,7 +47,63 @@ from pathlib import Path
 
 HOST = "127.0.0.1"                    # 代理监听地址
 FALLBACK_PORT = 7890                  # 配置文件读不到时的兜底端口
-MIHOMO_DIR = Path(os.environ.get("MIHOMO_DIR", "/opt/homebrew/etc/mihomo"))
+
+# ── 平台 ──
+# 系统代理开关（start/stop/nics）靠 networksetup，是 macOS 专有的；
+# rules 那一套在 Linux 上完全可用（Debian 上 mihomo 一般跑在 systemd 里）。
+IS_MACOS = sys.platform == "darwin"
+SERVICE_HINT = "brew services start mihomo" if IS_MACOS else "systemctl start mihomo"
+RESTART_HINT = "brew services restart mihomo" if IS_MACOS else "systemctl restart mihomo"
+
+# 配置目录候选（按优先级，第一个含 config.yaml 的胜出）。
+# 写死 /opt/homebrew/etc/mihomo 只能在 macOS(brew) 上用，
+# Debian 常见的是 /etc/mihomo 或 /usr/local/etc/mihomo。
+MIHOMO_DIR_CANDIDATES = [
+    Path.home() / ".config/mihomo",
+    Path("/etc/mihomo"),
+    Path("/opt/homebrew/etc/mihomo"),      # macOS Apple Silicon（brew）
+    Path("/usr/local/etc/mihomo"),         # macOS Intel（brew）/ Linux 手动安装
+    Path("/opt/mihomo"),
+    Path("/etc/clash"),                   # 老 Clash 的目录
+    Path.home() / ".config/clash",
+]
+
+
+def discover_mihomo_dir() -> Path:
+    """找 mihomo 的配置目录：环境变量优先，其次按常见路径探测。"""
+    if env := os.environ.get("MIHOMO_DIR"):
+        return Path(env)
+    for cand in MIHOMO_DIR_CANDIDATES:
+        if (cand / "config.yaml").exists():
+            return cand
+    return Path("/opt/homebrew/etc/mihomo") if IS_MACOS else Path("/etc/mihomo")
+
+
+MIHOMO_BIN_CANDIDATES = [
+    "/opt/homebrew/bin/mihomo",        # macOS Apple Silicon（brew）
+    "/usr/local/bin/mihomo",           # macOS Intel（brew）/ Linux 手动装
+    "/usr/bin/mihomo",
+    "/opt/mihomo/mihomo",
+]
+
+
+def discover_mihomo_bin() -> str | None:
+    """找 mihomo 可执行文件：先查 PATH，再查几个常见安装位置。找不到返回 None。
+
+    找不到就必须直接退出：这工具干的就是管 mihomo，没装它就没有任何事可做，
+    继续跑只会得到一堆看不懂的下游错误（比如 subprocess 的 FileNotFoundError）。
+    """
+    if found := shutil.which("mihomo"):
+        return found
+    for c in MIHOMO_BIN_CANDIDATES:
+        if Path(c).exists():
+            return c
+    return None
+
+
+MIHOMO_DIR = discover_mihomo_dir()
+MIHOMO_BIN = discover_mihomo_bin()
+
 STATE_FILE = Path.home() / ".local/state/mihomo-cli" / "state.json"
 TEST_URL = os.environ.get("MIHOMO_TEST_URL", "http://www.gstatic.com/generate_204")  # 连通性探测目标
 PROBE_TIMEOUT = 4.0                   # 探测超时（秒）
@@ -64,6 +128,13 @@ KINDS = {
 # ─────────────────────────── 输出小工具 ───────────────────────────
 
 _TTY = sys.stdout.isatty()
+
+# 行缓冲：fetch 会逐个文件打进度，被重定向/接管道时默认是块缓冲，
+# 过程里什么都看不到（実踩过：接 tail 看 fetch，等了三分钟屏幕上一片空白）。
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, OSError):
+    pass
 
 
 def _c(code: str, s: str) -> str:
@@ -111,7 +182,15 @@ def die(msg: str) -> "NoReturn":  # noqa: F821
 
 
 def run(*cmd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True)
+    """跑一个外部命令。命令不存在时返回 returncode=127 的空结果，**不抛异常**。
+
+    最小化安装的 Debian 可能没有 pgrep/lsof/ss，直接 subprocess 会抛
+    FileNotFoundError，变成一串看不懂的回溯。让下游自己决定怎么降级。
+    """
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: command not found")
 
 
 def ns(*args: str) -> str:
@@ -148,18 +227,39 @@ def proxy_port() -> int:
 
 
 def listener(port: int) -> list[tuple[str, str]]:
-    """返回监听该端口的 [(命令名, PID)]。
+    """返回监听该端口的 [(命令名, PID)]。拿不准时返回空列表。
 
     光看端口通不通是不够的：本机任何东西占了 7890 都会被误认为是 mihomo
     （实测 dcc 就占着 9999），把系统代理指过去等于直接断网。所以要认进程身份。
+
+    macOS 用 lsof（自带）；Debian 最小安装往往没有 lsof，回退到 iproute2 的 ss；
+    两个都没有时返回空——调用方要靠 can_check_listener() 区分
+    “确实没人监听”和“本机查不了”。
     """
-    p = run("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN")
-    found = []
-    for line in p.stdout.splitlines()[1:]:        # 跳过表头
-        parts = line.split()
-        if len(parts) >= 2 and parts[1].isdigit():
-            found.append((parts[0], parts[1]))
+    found: list[tuple[str, str]] = []
+    if shutil.which("lsof"):
+        p = run("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN")
+        for line in p.stdout.splitlines()[1:]:        # 跳过表头
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                found.append((parts[0], parts[1]))
+        return found
+
+    # ss -ltnp 输出示例：
+    #   LISTEN 0 4096 127.0.0.1:7890 0.0.0.0:* users:(("mihomo",pid=123,fd=5))
+    p = run("ss", "-ltnp")
+    for line in p.stdout.splitlines():
+        if f":{port} " not in line + " ":
+            continue
+        m = re.search(r'users:$\(\("([^"]+)",pid=(\d+)', line)
+        if m:
+            found.append((m.group(1), m.group(2)))
     return found
+
+
+def can_check_listener() -> bool:
+    """本机有没有工具能查“谁在监听端口”（lsof 或 ss）。"""
+    return bool(shutil.which("lsof") or shutil.which("ss"))
 
 
 # ─────────────────────────── 网卡枚举 ───────────────────────────
@@ -170,8 +270,11 @@ def listener(port: int) -> list[tuple[str, str]]:
 
 
 def active_device() -> str:
-    """当前默认路由走的是哪个接口（en0 / en8 / bridge0…）；没有则返回空串。"""
-    m = re.search(r"interface:\s*(\S+)", run("route", "-n", "get", "default").stdout)
+    """当前默认路由走的是哪个接口（en0 / eth0…）；没有则返回空串。"""
+    if IS_MACOS:
+        m = re.search(r"interface:\s*(\S+)", run("route", "-n", "get", "default").stdout)
+    else:
+        m = re.search(r"\bdev\s+(\S+)", run("ip", "route", "show", "default").stdout)
     return m.group(1) if m else ""
 
 
@@ -408,8 +511,25 @@ def forget_state(service: str) -> None:
 
 
 def mihomo_pid() -> str | None:
-    p = run("pgrep", "-x", "mihomo")
-    return p.stdout.split()[0] if p.returncode == 0 and p.stdout.split() else None
+    """内核进程的 PID。
+
+    macOS 用 pgrep；Linux 上 pgrep（procps）在最小化安装里可能没有，
+    就到 /proc 里直接找——纯标准库，不依赖任何外部命令。
+    """
+    if shutil.which("pgrep"):
+        p = run("pgrep", "-x", "mihomo")
+        if p.returncode == 0 and p.stdout.split():
+            return p.stdout.split()[0]
+    if Path("/proc").is_dir():                       # Linux 回退
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                if (d / "comm").read_text(errors="replace").strip() == "mihomo":
+                    return d.name
+            except OSError:
+                continue
+    return None
 
 
 def api(path: str) -> dict | None:
@@ -489,7 +609,23 @@ def probe(port: int) -> tuple[bool, str]:
 # ─────────────────────────── 子命令 ───────────────────────────
 
 
+def require_macos(what: str) -> None:
+    """系统代理开关只能靠 macOS 的 networksetup，别的平台上要说清而不是崩。
+
+    不拦的话在 Linux 上会是 FileNotFoundError 回溯，看不懂发生了什么。
+    """
+    if not IS_MACOS:
+        die(
+            f"{what} 只在 macOS 上可用：它靠 networksetup 改系统的代理设置。\n"
+            f"  Linux 上请直接管 mihomo 的配置：\n"
+            f"    mihomo-cli rules diff      # 看差异\n"
+            f"    mihomo-cli rules apply     # 应用规则\n"
+            f"    mihomo-cli status          # 看内核/规则/节点状态"
+        )
+
+
 def cmd_nics(_: argparse.Namespace) -> int:
+    require_macos("nics")
     services = list_services()
     print(dim("macOS 网卡（start / stop 的参数就是下面的名字，带空格要加引号）"))
     print()
@@ -516,6 +652,7 @@ def cmd_nics(_: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    require_macos("start")
     svc = match_service(args.service, list_services()) if args.service is not None else active_service()
     if svc is None:                      # 没活跃网卡就不猜，直接让用户说清楚
         die(no_active_nic_error())
@@ -530,9 +667,14 @@ def cmd_start(args: argparse.Namespace) -> int:
     found = listener(port)
     names = {n for n, _ in found}
     if not found:
+        if not can_check_listener():          # 查不了 ≠ 没监听，别误报
+            die(
+                f"本机缺 lsof 和 ss，无法确认 {HOST}:{port} 上是不是 mihomo。\n"
+                f"  装其中一个再试：apt install lsof（或 iproute2）"
+            )
         die(
             f"{HOST}:{port} 没有任何进程监听，先拉起内核：\n"
-            f"    brew services start mihomo"
+            f"    {SERVICE_HINT}"
         )
     if "mihomo" not in names:
         who = ", ".join(f"{n}(PID {p})" for n, p in found)
@@ -608,6 +750,7 @@ def teardown(service: str) -> str:
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
+    require_macos("stop")
     targets, why = resolve_stop_targets(args.service)
     if why:
         note(why)
@@ -631,10 +774,6 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    services = list_services()
-    svc = match_service(args.service, services) if args.service is not None else active_service(services)
-    if svc is not None and args.service is None:
-        note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
     port = proxy_port()
     pid = mihomo_pid()
     found = listener(port)
@@ -643,14 +782,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     def line(label: str, value: str) -> None:
         print(f"  {pad(label, 12)} {value}")
 
-    if svc is None:
-        where = "无活跃网卡"
+    # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样
+    services: list[dict] = []
+    svc: dict | None = None
+    if IS_MACOS:
+        services = list_services()
+        svc = (match_service(args.service, services) if args.service is not None
+               else active_service(services))
+        if svc is not None and args.service is None:
+            note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
+        where = "无活跃网卡" if svc is None else (
+            f"{svc['name']} / {svc['device']}" if svc["device"] else svc["name"])
     else:
-        where = f"{svc['name']} / {svc['device']}" if svc["device"] else svc["name"]
+        where = sys.platform
     print(dim(f"mihomo  /  {where}"))
     line("内核进程", ok(f"运行中 (PID {pid})") if pid else bad("未运行"))
 
-    if not found:
+    if not can_check_listener():
+        line("代理端口", warn(f"{HOST}:{port} 无法确认（本机缺 lsof 和 ss）"))
+    elif not found:
         line("代理端口", bad(f"{HOST}:{port} 无监听"))
     elif "mihomo" in names:
         who = ", ".join(f"{n}({p})" for n, p in found)
@@ -663,6 +813,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         line("控制接口", ok(f"{read_config('external-controller') or HOST + ':9090'} 可用"))
     else:
         line("控制接口", warn("读不到（检查 external-controller / secret）"))
+
+    if not IS_MACOS:
+        line("系统代理", dim("macOS 专用（networksetup），本机不适用"))
+        if node := current_node():
+            chain, delay = node
+            lat = f"{delay}ms" if delay else dim("无延迟数据")
+            line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
+        if "mihomo" in names:
+            good, info = probe(port)
+            line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
+        return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
     opened = [
@@ -762,6 +923,23 @@ def config_path() -> Path:
     return MIHOMO_DIR / "config.yaml"
 
 
+def require_config() -> Path:
+    """拿 config.yaml；找不到就把所有试过的路径列出来。
+
+    两端默认目录不同（macOS 是 /opt/homebrew/etc/mihomo，Debian 常见
+    /etc/mihomo），探测失败时得让人知道去哪儿改，而不是一个 FileNotFoundError。
+    """
+    cfg = config_path()
+    if cfg.exists():
+        return cfg
+    tried = "\n".join(f"    {c}" for c in MIHOMO_DIR_CANDIDATES)
+    die(
+        f"找不到 config.yaml（当前用的是 {MIHOMO_DIR}）\n"
+        f"  用环境变量指定：MIHOMO_DIR=/etc/mihomo mihomo-cli ...\n"
+        f"  或者确认它在下列位置之一：\n{tried}"
+    )
+
+
 def fragment_rules(path: Path) -> list[str]:
     """读一个片段里的规则行，跳过注释与空行。"""
     out = []
@@ -850,19 +1028,68 @@ def rule_key(line: str) -> tuple[str, str]:
     return (p[0].upper(), p[1].casefold() if len(p) > 1 else "")
 
 
+BACKUP_DIR = STATE_FILE.parent    # 备份跟工具状态放一起，不占 mihomo 的配置目录
+BACKUP_KEEP = 5                   # 只保留最近 N 个
+
+
+def fmt_ts(ts: str) -> str:
+    """20260920-174755 → 2026-09-20 17:47:55（带序号则缀在后面）。"""
+    d, _, rest = ts.partition("-")
+    t, _, extra = rest.partition("-")
+    s = (f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
+         if len(d) == 8 and len(t) == 6 else ts)
+    return f"{s}（第 {extra} 份）" if extra else s
+
+
 def backup_config() -> Path:
+    """把当前 config 备份一份，返回备份路径。
+
+    为什么不放 config 同级：那个目录由 brew 管（里面还有 geoip.metadb 8.5MB
+    之类），而 apply 后的 config 有 5MB，每次留下一份很快就堆成几十 MB。
+
+    必须保证备份成功才继续：没备份就写文件，等于把回滚能力赌掉。
+    同时只留最近 BACKUP_KEEP 个，否则照旧无限增长。
+
+    名字必须唯一：时间戳只到秒，同一秒里第二次备份（例如 rollback 先存档
+    再恢复）会直接覆盖第一份——实跈踩过：回滚把要恢复的那份覆盖成了坏配置，
+    然后“恢复”一个坏配置，还报成功。
+    """
     cfg = config_path()
-    bak = cfg.with_name(f"{cfg.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
-    shutil.copy2(cfg, bak)
+    base = f"{cfg.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    bak = BACKUP_DIR / base
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        n = 2
+        while bak.exists():
+            bak = BACKUP_DIR / f"{base}-{n}"
+            n += 1
+        shutil.copy2(cfg, bak)
+    except OSError as e:
+        die(f"备份失败，拒绝继续写配置：{e}")
+    for old in sorted(BACKUP_DIR.glob(f"{cfg.name}.bak-*"))[:-BACKUP_KEEP]:
+        old.unlink(missing_ok=True)
     return bak
 
 
 def validate_config() -> tuple[bool, str]:
-    """跑 mihomo -t。返回 (是否通过, 最后一行输出)。"""
-    p = run("mihomo", "-t", "-d", str(MIHOMO_DIR))
+    """跑 mihomo -t。返回 (是否通过, 最有信息量的一行输出)。
+
+    失败时 mihomo 先打 level=error 的具体原因，最后一行才是笼统的
+    "test failed"。只报最后一行等于把原因丢了——例如
+    “can't download MMDB”（缺 geoip.metadb 且下不下来），
+    看到这句才知道该去补数据文件。
+
+    MIHOMO_BIN 在这里保证不是 None——main() 已经先检查过并直接退出了。
+    """
+    p = run(str(MIHOMO_BIN), "-t", "-d", str(MIHOMO_DIR))
     out = (p.stdout + p.stderr).strip()
-    last = out.splitlines()[-1] if out else "（无输出）"
-    return p.returncode == 0 and "test is successful" in out, last
+    lines = [l for l in out.splitlines() if l.strip()]
+    if p.returncode == 0 and "test is successful" in out:
+        return True, lines[-1] if lines else "（无输出）"
+    for l in lines:
+        if "level=error" in l:
+            return False, l
+    return False, lines[-1] if lines else "（无输出）"
 
 
 def reload_config() -> bool:
@@ -880,6 +1107,74 @@ def reload_config() -> bool:
         return False
 
 
+# GeoIP/GeoSite 数据文件。mihomo 缺文件时会自己去这些地址下，下不到就整份配置加载失败。
+# 把地址写在这里，是为了告警里能直接给出可复制的取文件命令。
+GEOX_URL = {
+    "geoip.metadb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
+    "geosite.dat": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+}
+# 项目里自带的 geodata（可选）。mihomo 只认配置目录（-d 那个）里的文件，
+# 所以这里存一份、apply 时复制过去，服务器上才能 clone 下来就能用。
+GEODATA_DIR = Path(__file__).resolve().parent / "geodata"
+# 哪些规则类型需要哪个数据文件
+RULE_GEODATA = {"GEOIP": "geoip.metadb", "GEOSITE": "geosite.dat"}
+
+
+def needed_geodata(rules: list[str]) -> set[str]:
+    """这批规则需要哪些 geodata 文件。"""
+    return {RULE_GEODATA[t] for r in rules
+            for t in [r.split(",")[0].upper()] if t in RULE_GEODATA}
+
+
+def install_geodata(rules: list[str]) -> list[str]:
+    """把项目 geodata/ 里那份装到配置目录——mihomo 只看配置目录。
+
+    只在目标不存在时复制（不覆盖已有的，避免把你手动更新过的版本换掉）；
+    两边都有但大小不一样时提醒一下，不默默动你的文件。
+    """
+    notes = []
+    for f in sorted(needed_geodata(rules)):
+        src, dst = GEODATA_DIR / f, MIHOMO_DIR / f
+        if not src.exists():
+            continue
+        if not dst.exists():
+            try:
+                shutil.copy2(src, dst)
+                notes.append(f"{f} 已从项目 geodata/ 装到 {dst}")
+            except OSError as e:
+                notes.append(f"{f} 复制失败：{e}")
+        elif src.stat().st_size != dst.stat().st_size:
+            notes.append(f"{f} 项目里那份和配置目录里的大小不一样，"
+                         f"要换成项目那份：cp {src} {dst}")
+    return notes
+
+
+def geodata_warnings(rules: list[str]) -> list[str]:
+    """规则里有 GEOIP/GEOSITE、但配置目录缺对应数据文件时给提醒。
+
+    为什么要提醒：mihomo 会自己去 GitHub 下，而那个下载在国内容易拿不到，
+    且下不到的后果是**整份配置加载失败**（不是只有那几条规则失效）。
+    实测：断网容器里缺 geoip.metadb 时 -t 直接 failed，报错是
+    “can't download MMDB”。
+
+    命令写的是下到项目的 geodata/，apply 会自动装到配置目录；
+    这样也绕开了“要连 GitHub 才能起代理”的死结。
+    """
+    out = []
+    for f in sorted(needed_geodata(rules)):
+        if (MIHOMO_DIR / f).exists() or (GEODATA_DIR / f).exists():
+            continue
+        t = next(t for t, name in RULE_GEODATA.items() if name == f)
+        out.append(
+            f"{f} 不存在，但规则里用了 {t}——mihomo 会去 GitHub 下，"
+            f"下不到就是整份配置加载失败。\n"
+            f"跑 `mihomo-cli rules fetch` 拿（下到项目的 geodata/，apply 会装过去；"
+            f"raw 拿不到就加 --proxy）。手动也行：\n"
+            f"curl -L -o {GEODATA_DIR / f} {GEOX_URL[f]}"
+        )
+    return out
+
+
 def report_problems(problems: list[dict]) -> None:
     for p in problems:
         if p["kind"] == "missing":
@@ -889,15 +1184,218 @@ def report_problems(problems: list[dict]) -> None:
         elif p["kind"] == "no_policy":
             print(warn(f"  ⚠ 目录名推不出策略，已跳过：{p['entry']}"))
         elif p["kind"] == "unsupported":
-            print(warn(f"  ⚠ 类型不被 mihomo 支持，已跳过：{p['entry']} → {p['rule']}"))
+            detail = "、".join(f"{t}×{n}" for t, n in sorted(p["types"].items()))
+            print(warn(f"  ⚠ {p['entry']} 跳过 {sum(p['types'].values())} 条 "
+                       f"mihomo 不支持的类型：{detail}"))
+
+
+def list_backups() -> list[tuple[str, Path, Path]]:
+    """列出可用备份：[(时间戳, 路径, 所在目录)]，新 → 旧。
+
+    扫两个地方：工具自己的备份目录，以及 config 同级（旧版行为和手工
+    备份在那里，最关键的“apply 前那份”就在那）。只扫一处会看不见它们。
+    """
+    cfg = config_path()
+    items: list[tuple[str, Path, Path]] = []
+    for src in (BACKUP_DIR, cfg.parent):
+        for p in src.glob(f"{cfg.name}.bak-*"):
+            items.append((p.name.rsplit(".bak-", 1)[-1], p, src))
+    return sorted(items, key=lambda x: x[0], reverse=True)
+
+
+def size_str(n: int) -> str:
+    return f"{n} 字节" if n < 1024 else f"{n / 1024:.0f} KB"
+
+
+def cmd_rules_rollback(args: argparse.Namespace) -> int:
+    cfg = require_config()
+    items = list_backups()
+    if not items:
+        die(f"没有可用备份。找过这两个地方：\n    {BACKUP_DIR}\n    {cfg.parent}")
+
+    print(dim(f"可用备份（新 → 旧）："))
+    for i, (ts, p, src) in enumerate(items, 1):
+        where = "状态目录" if src == BACKUP_DIR else "config 同级"
+        mark = ok("← 默认") if i == 1 else ""
+        print(f"  {i:>2}  {fmt_ts(ts):<28}  {size_str(p.stat().st_size):>9}"
+              f"  {dim(where)}  {mark}")
+    if args.list:
+        return 0
+
+    # 选哪个：--to 可以是序号，也可以是时间戳前缀
+    if args.to is None:
+        target = items[0]
+    elif args.to.isdigit() and 1 <= int(args.to) <= len(items):
+        target = items[int(args.to) - 1]
+    else:
+        hits = [x for x in items if x[0].startswith(args.to)]
+        if len(hits) != 1:
+            die(f"--to {args.to} 匹配到 {len(hits)} 个备份，写完整时间戳或序号")
+        target = hits[0]
+
+    ts, src_path, _ = target
+    # 先把备份内容读进内存：万一后面任何东西覆盖了这个文件，恢复的仍是这份内容
+    payload = src_path.read_bytes()
+    # 回滚本身也要可撤销：先把当前配置另存一份（同时也受保留策略约束）
+    keep = backup_config()
+    cfg.write_bytes(payload)
+
+    # 先校验再报成功：不然会先打一句“已回滚”，紧跟着又说“校验失败”
+    good, last = validate_config()
+    if not good:
+        shutil.copy2(keep, cfg)                     # 回滚的回滚
+        print(bad(f"✗ {fmt_ts(ts)} 这份备份没通过 mihomo -t，已退回回滚前的配置"))
+        print(bad(f"  {last}"))
+        print(dim(f"  回滚前的配置已存到 {keep}"))
+        return 1
+
+    print(f"{ok('✓')} 当前配置已另存 {dim(str(keep))}")
+    print(f"{ok('✓')} 已回滚到 {fmt_ts(ts)} 的备份  {dim(size_str(len(payload)))}")
+    print(f"{ok('✓')} mihomo -t 校验通过  {dim(last)}")
+
+    if args.reload:
+        if reload_config():
+            print(f"{ok('✓')} 已热重载运行中的 mihomo")
+        else:
+            print(warn(f"⚠ 热重载失败，文件已写好，可以 {RESTART_HINT}"))
+    else:
+        print(dim("  没有热重载；加 --reload 让它立即生效"))
+    return 0
+
+
+# 片段的上游来源：树里的相对路径 → ACL4SSR 仓库里的路径。
+# 注：GoogleCN/Apple/Telegram/ProxyGFWlist 在 ACL4SSR 里顶层和 Ruleset/ 下都有，
+# 这里用的是顶层那份（实比 md5 确认过：树里的内容与顶层一致）。
+# 只有 GoogleFCM 在 Ruleset/ 下。
+UPSTREAM = {
+    "direct/LocalAreaNetwork.list": "Clash/LocalAreaNetwork.list",
+    "direct/GoogleFCM.list": "Clash/Ruleset/GoogleFCM.list",
+    "direct/GoogleCN.list": "Clash/GoogleCN.list",
+    "direct/Apple.list": "Clash/Apple.list",
+    "direct/ChinaMedia.list": "Clash/ChinaMedia.list",
+    "direct/ChinaIp.list": "Clash/ChinaIp.list",
+    "direct/ChinaIpV6.list": "Clash/ChinaIpV6.list",
+    "direct/ChinaDomain.list": "Clash/ChinaDomain.list",
+    "direct/ChinaCompanyIp.list": "Clash/ChinaCompanyIp.list",
+    "proxy/Telegram.list": "Clash/Telegram.list",
+    "proxy/ProxyMedia.list": "Clash/ProxyMedia.list",
+    "proxy/ProxyGFWlist.list": "Clash/ProxyGFWlist.list",
+    "proxy/ProxyLite.list": "Clash/ProxyLite.list",
+    "reject/BanAD.list": "Clash/BanAD.list",
+    "reject/BanProgramAD.list": "Clash/BanProgramAD.list",
+    "reject/BanEasyList.list": "Clash/BanEasyList.list",
+    "reject/BanEasyListChina.list": "Clash/BanEasyListChina.list",
+    "reject/BanEasyPrivacy.list": "Clash/BanEasyPrivacy.list",
+}
+# 先从 raw 拉，不通再退 CDN（raw.githubusercontent 在国内经常直接拿不到）
+# 上游只取 raw.githubusercontent.com，不挂 CDN 退路：多一个第三方就多一个供应链面，
+# 而实测走本机 mihomo 代理每个文件 0.5~1.3 秒，本来就走得通。
+UPSTREAM_BASE = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/"
+
+
+def http_get(url: str, proxy: str | None, timeout: float = 30) -> bytes:
+    """下载一个 URL。proxy 形如 http://127.0.0.1:7890，None 表示直连。
+
+    超时给 30 秒：单个文件最大也就 1.4MB，实测走代理 1.3 秒。
+    原来写 90 秒，一旦碰上网络停滞、再叠上两级退路，用户要自等三分钟。
+    """
+    handlers = [urllib.request.ProxyHandler(
+        {"http": proxy, "https": proxy} if proxy else {})]
+    opener = urllib.request.build_opener(*handlers)
+    req = urllib.request.Request(url, headers={"User-Agent": "mihomo-cli"})
+    with opener.open(req, timeout=timeout) as r:
+        return r.read()
+
+
+def cmd_rules_fetch(args: argparse.Namespace) -> int:
+    """从 ACL4SSR 拉片段、从 meta-rules-dat 拉 geodata。
+
+    拉下来的就是**上游原文**，一个字不改：这样镜像片段能直接和上游 diff，
+    “本地有没有偏离上游”一目了然。上游里那些 mihomo 不支持的类型
+    （URL-REGEX）由构建阶段忽略并告警，不在文件层面动手。
+
+    仓库里不入库这些第三方内容（GPL），所以新机器上 clone 完跑一次这个，
+    再把东西装到配置目录就齐了。
+
+    默认直连，不默默借本机 mihomo 的代理：一是 fetch 恰恰是配置/代理坏掉时
+    才最需要跑的命令，再把代理绕进去就成了鸡生蛋；二是不想隐式换出口。
+    真要过代理（比如服务器上 raw 被墙）就显式给 --proxy。
+    """
+    proxy = args.proxy or None
+    print(dim(f"下载路线：{'走代理 ' + proxy if proxy else '直连'}"))
+    print()
+
+    added = updated = same = failed = 0
+    for rel in sorted(UPSTREAM):
+        dst = RULES_DIR / rel
+        try:
+            data = http_get(UPSTREAM_BASE + UPSTREAM[rel], proxy)
+        except (urllib.error.URLError, OSError) as e:
+            print(bad(f"  ✗ {rel}  下载失败：{e}"))
+            failed += 1
+            continue
+
+        old = dst.read_bytes() if dst.exists() else None
+        if old == data:
+            print(dim(f"  = {rel}  已是最新"))
+            same += 1
+            continue
+        if args.dry_run:
+            state = "新增" if old is None else "会更新"
+            print(warn(f"  ~ {rel}  {state}"))
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)                    # 上游原文，一字不改
+        if old is None:
+            print(f"  {ok('+')} {rel}  新增  {size_str(len(data))}")
+            added += 1
+        else:
+            print(f"  {ok('~')} {rel}  更新  {size_str(len(old))} → {size_str(len(data))}")
+            updated += 1
+
+    # geodata：只下有规则在用、且本地/配置目录都没有的
+    order, _ = read_order()
+    used_types = set()
+    for entry, _ in order:
+        lines = [entry[2:]] if entry.startswith("[]") else (
+            fragment_rules(RULES_DIR / entry) if (RULES_DIR / entry).exists() else [])
+        used_types |= {l.split(",")[0].upper() for l in lines}
+    for f in sorted({RULE_GEODATA[t] for t in used_types if t in RULE_GEODATA}):
+        have = (GEODATA_DIR / f).exists() or (MIHOMO_DIR / f).exists()
+        if have and not args.geodata:
+            continue
+        if args.dry_run:
+            print(warn(f"  ~ geodata/{f}  会下载"))
+            continue
+        try:
+            blob = http_get(GEOX_URL[f], proxy)
+        except (urllib.error.URLError, OSError) as e:
+            print(bad(f"  ✗ geodata/{f}  下载失败：{e}"))
+            failed += 1
+            continue
+        GEODATA_DIR.mkdir(parents=True, exist_ok=True)
+        (GEODATA_DIR / f).write_bytes(blob)
+        print(f"  {ok('+')} geodata/{f}  {size_str(len(blob))}")
+        updated += 1
+
+    print()
+    tail = f"新增 {added} / 更新 {updated} / 未变 {same}"
+    if failed:
+        tail += f" / {bad(f'失败 {failed}')}"
+    print(f"  {tail}")
+    if args.dry_run:
+        print(dim("  --dry-run：什么都没写。去掉它才会真的下载。"))
+    else:
+        print(dim("  接着跑 mihomo-cli rules diff 看差异，没问题再 apply"))
+    return 1 if failed else 0
 
 
 def cmd_rules(args: argparse.Namespace) -> int:
     action = getattr(args, "rules_action", None) or "diff"   # 不带则默认 diff，只读
     if not hasattr(args, "prune"):
         args.prune = False          # 没走子解析器时没有这个属性
-    return {"order": cmd_rules_order, "diff": cmd_rules_diff,
-            "apply": cmd_rules_apply}[action](args)
+    return {"order": cmd_rules_order, "diff": cmd_rules_diff, "fetch": cmd_rules_fetch,
+            "apply": cmd_rules_apply, "rollback": cmd_rules_rollback}[action](args)
 
 
 def shadow_reason(t: str, v: str, seen_kw: set[str], seen_sfx: set[str]) -> str | None:
@@ -967,11 +1465,15 @@ def walk_order(order: list[tuple[str, str | None]], prune: bool
             continue
 
         st = {"n": 0, "dup": 0, "shadow": 0, "examples": []}
+        skipped: dict[str, int] = {}                   # 不支持的类型 → 条数
         for line in fragment_rules(frag):
             f = [x.strip() for x in line.split(",")]
             t = f[0].upper()
             if t not in SUPPORTED_RULE_TYPES:
-                problems.append({"kind": "unsupported", "entry": entry, "rule": line})
+                # 上游里有 mihomo 不支持的类型（如 URL-REGEX）。文件保持纯镜像，
+                # 这里忽略掉并报一行汇总——不静默，因为这种类型一旦写进配置
+                # 就是整份加载失败（实测 -t 会 failed），得让人知道被跳过了。
+                skipped[t] = skipped.get(t, 0) + 1
                 continue
             st["n"] += 1
             v = f[1].lower() if len(f) > 1 else ""
@@ -991,6 +1493,8 @@ def walk_order(order: list[tuple[str, str | None]], prune: bool
             elif t == "DOMAIN-SUFFIX":
                 seen_sfx.add(v)
         stats[entry] = st
+        if skipped:
+            problems.append({"kind": "unsupported", "entry": entry, "types": skipped})
 
     # 磁盘上有、但顺序表里没列的片段会被静默忽略——这是个坑，必须提醒
     listed = {e for e, _ in order if not e.startswith("[]")}
@@ -1040,7 +1544,7 @@ def cmd_rules_order(_: argparse.Namespace) -> int:
 def cmd_rules_diff(args: argparse.Namespace) -> int:
     rules, problems, origin, dedup = build_rules(prune=args.prune)
     n_inline = sum(1 for e, _ in read_order()[0] if e.startswith("[]"))
-    head, cur, tail = split_config(config_path().read_text(encoding="utf-8"))
+    head, cur, tail = split_config(require_config().read_text(encoding="utf-8"))
 
     # 注意：同一个 (类型,值) 可能出现在多个片段里。mihomo 先到先得，
     # 所以映射必须保留**第一次**出现的那条，用 setdefault 而不是字典推导（后者留最后一条）。
@@ -1099,15 +1603,19 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
     if not rules:
         die("拼出来 0 条规则，拒绝写入（检查 rules/order.txt 和片段是否为空）")
 
-    cfg = config_path()
+    cfg = require_config()
     text = cfg.read_text(encoding="utf-8")
     head, cur, tail = split_config(text)
     if problems:
         report_problems(problems)
         print()
+    for n in install_geodata(rules):
+        print(f"{ok('✓')} {n}")
+    for w in geodata_warnings(rules):
+        print(warn("  ⚠ " + w.replace("\n", "\n    ")))
 
     bak = backup_config()
-    print(f"{ok('✓')} 已备份 {dim(bak.name)}")
+    print(f"{ok('✓')} 已备份 {dim(str(bak))}")
 
     cfg.write_text(head + "".join(f"- {r}\n" for r in rules) + tail,
                    encoding="utf-8", newline="\n")
@@ -1122,7 +1630,7 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
     good, last = validate_config()
     if not good:
         shutil.copy2(bak, cfg)                      # 回滚
-        print(bad(f"✗ mihomo -t 校验失败，已回滚到 {bak.name}"))
+        print(bad(f"✗ mihomo -t 校验失败，已回滚到 {bak}"))
         print(bad(f"  {last}"))
         return 1
     print(f"{ok('✓')} mihomo -t 校验通过  {dim(last)}")
@@ -1131,7 +1639,7 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
         if reload_config():
             print(f"{ok('✓')} 已热重载运行中的 mihomo  {dim('（通过 external-controller API）')}")
         else:
-            print(warn("⚠ 热重载失败，配置文件已写入，可以 brew services restart mihomo"))
+            print(warn(f"⚠ 热重载失败，配置文件已写入，可以 {RESTART_HINT}"))
     else:
         print(dim("  没有热重载；加 --reload 让它立即生效（否则等下次重启 mihomo）"))
     return 0
@@ -1141,7 +1649,7 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
 
 SUBCOMMANDS = {
     "nics": ("列出所有网卡（含设备名和代理状态）", cmd_nics),
-    "rules": ("把 rules/ 目录下的规则应用到 config.yaml", cmd_rules),
+    "rules": ("规则树：order 看顺序 / fetch 拉片段 / diff 对比 / apply 落地", cmd_rules),
     "start": ("开系统代理", cmd_start),
     "stop": ("关系统代理", cmd_stop),
     "status": ("查看当前状态（默认）", cmd_status),
@@ -1159,7 +1667,9 @@ def main(argv: list[str] | None = None) -> int:
         description="开关 macOS 系统代理（按网卡指定），以及把 rules/ 目录应用到 mihomo 配置",
         epilog=(
             "网卡名用 `mihomo-cli nics` 查；不传网卡名时用当前活跃网卡（没有就直接失败），"
-            "stop 则关掉之前 start 过的。规则用 `mihomo-cli rules diff` 先看再 apply。"
+            "stop 则关掉之前 start 过的。\n"
+            "规则：新机器先 `rules fetch` 把 ACL4SSR 片段和 geodata 拉下来，"
+            "再 `rules diff` 看差异，没问题才 `rules apply`。"
         ),
     )
     sub = parser.add_subparsers(dest="action")
@@ -1179,12 +1689,33 @@ def main(argv: list[str] | None = None) -> int:
                 sp.add_argument("--prune", action="store_true",
                                 help="额外剔除被前面更宽规则遮蔽的条目（行为等价，只是让规则表变干净）")
             ra.add_argument("--reload", action="store_true", help="写成功后热重载运行中的 mihomo")
+            rr = rsub.add_parser("rollback", help="把 config.yaml 回滚到某个备份（当前配置会先另存）")
+            rr.add_argument("--list", action="store_true", help="只列出可用备份，不回滚")
+            rr.add_argument("--to", metavar="序号或时间戳", default=None,
+                            help="指定回滚到哪个备份；不写则用最近的一个")
+            rr.add_argument("--reload", action="store_true", help="回滚后热重载运行中的 mihomo")
             rsub.add_parser("order", help="打印当前生效的片段顺序与各自的规则数")
+            rf = rsub.add_parser("fetch", help="从 ACL4SSR 拉片段、从 meta-rules-dat 拉 geodata")
+            rf.add_argument("--dry-run", action="store_true", help="只列出会下载/更新什么，不写文件")
+            rf.add_argument("--geodata", action="store_true", help="geodata 也重新下（默认只在缺的时候下）")
+            rf.add_argument("--proxy", metavar="URL", default=None,
+                            help="下载走这个代理，如 http://127.0.0.1:7890；默认直连")
 
     args = parser.parse_args(argv)
     if args.action is None:               # 不带参数 = status，只读，不碰系统设置
         args = parser.parse_args(["status"])
     args.action = ALIASES.get(args.action, args.action)
+
+    # 没装 mihomo 就直接退出。放在 parse_args 之后，--help 仍然能用。
+    # 任何子命令都要用它（校验配置、看内核、改系统代理），没装它无事可做。
+    if MIHOMO_BIN is None:
+        die(
+            "找不到 mihomo 可执行文件，直接退出。\n"
+            "  装它：\n"
+            "    macOS   brew install mihomo\n"
+            "    Debian  见 https://github.com/MetaCubeX/mihomo/releases\n"
+            "  已找过 PATH 以及：\n    " + "\n    ".join(MIHOMO_BIN_CANDIDATES)
+        )
 
     return SUBCOMMANDS[args.action][1](args)
 
