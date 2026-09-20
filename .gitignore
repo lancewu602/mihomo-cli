@@ -13,5 +13,6 @@ venv/
 rules/*/*.list
 !rules/*/Custom.list
 
-# geodata（geoip.metadb 等）：GPL 的第三方数据，用 mihomo-cli rules fetch 拉
-geodata/
+# mihomo 的数据文件（geoip.metadb 等）：GPL 的第三方二进制，几 MB 一个，不入库。
+# 工具不碰它们——mihomo 只认配置目录里那份，缺了它自己会去下。
+*.metadb

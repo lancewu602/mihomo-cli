@@ -9,8 +9,7 @@ mihomo-cli —— 管 macOS 系统代理，以及把 rules/ 目录应用到 miho
     mihomo-cli status [网卡名]     看状态（不带任何参数时的默认动作）
 
     mihomo-cli rules order        片段顺序、各段规则数、多少条会被前面的片段吃掉
-    mihomo-cli rules fetch        从 ACL4SSR 拉 18 个片段、从 meta-rules-dat 拉 geodata
-                                  （--dry-run 只看，--geodata 连数据文件一起更新）
+    mihomo-cli rules fetch        从 ACL4SSR 拉 18 个片段（--dry-run 只看；--proxy 走代理下）
     mihomo-cli rules diff         对比 rules/ 树与现网 config.yaml（只读，不写文件）
     mihomo-cli rules apply        写 config.yaml：备份 → 写 → mihomo -t 校验 → 失败回滚
                                   加 --reload 让运行中的内核立即生效
@@ -1107,74 +1106,6 @@ def reload_config() -> bool:
         return False
 
 
-# GeoIP/GeoSite 数据文件。mihomo 缺文件时会自己去这些地址下，下不到就整份配置加载失败。
-# 把地址写在这里，是为了告警里能直接给出可复制的取文件命令。
-GEOX_URL = {
-    "geoip.metadb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
-    "geosite.dat": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
-}
-# 项目里自带的 geodata（可选）。mihomo 只认配置目录（-d 那个）里的文件，
-# 所以这里存一份、apply 时复制过去，服务器上才能 clone 下来就能用。
-GEODATA_DIR = Path(__file__).resolve().parent / "geodata"
-# 哪些规则类型需要哪个数据文件
-RULE_GEODATA = {"GEOIP": "geoip.metadb", "GEOSITE": "geosite.dat"}
-
-
-def needed_geodata(rules: list[str]) -> set[str]:
-    """这批规则需要哪些 geodata 文件。"""
-    return {RULE_GEODATA[t] for r in rules
-            for t in [r.split(",")[0].upper()] if t in RULE_GEODATA}
-
-
-def install_geodata(rules: list[str]) -> list[str]:
-    """把项目 geodata/ 里那份装到配置目录——mihomo 只看配置目录。
-
-    只在目标不存在时复制（不覆盖已有的，避免把你手动更新过的版本换掉）；
-    两边都有但大小不一样时提醒一下，不默默动你的文件。
-    """
-    notes = []
-    for f in sorted(needed_geodata(rules)):
-        src, dst = GEODATA_DIR / f, MIHOMO_DIR / f
-        if not src.exists():
-            continue
-        if not dst.exists():
-            try:
-                shutil.copy2(src, dst)
-                notes.append(f"{f} 已从项目 geodata/ 装到 {dst}")
-            except OSError as e:
-                notes.append(f"{f} 复制失败：{e}")
-        elif src.stat().st_size != dst.stat().st_size:
-            notes.append(f"{f} 项目里那份和配置目录里的大小不一样，"
-                         f"要换成项目那份：cp {src} {dst}")
-    return notes
-
-
-def geodata_warnings(rules: list[str]) -> list[str]:
-    """规则里有 GEOIP/GEOSITE、但配置目录缺对应数据文件时给提醒。
-
-    为什么要提醒：mihomo 会自己去 GitHub 下，而那个下载在国内容易拿不到，
-    且下不到的后果是**整份配置加载失败**（不是只有那几条规则失效）。
-    实测：断网容器里缺 geoip.metadb 时 -t 直接 failed，报错是
-    “can't download MMDB”。
-
-    命令写的是下到项目的 geodata/，apply 会自动装到配置目录；
-    这样也绕开了“要连 GitHub 才能起代理”的死结。
-    """
-    out = []
-    for f in sorted(needed_geodata(rules)):
-        if (MIHOMO_DIR / f).exists() or (GEODATA_DIR / f).exists():
-            continue
-        t = next(t for t, name in RULE_GEODATA.items() if name == f)
-        out.append(
-            f"{f} 不存在，但规则里用了 {t}——mihomo 会去 GitHub 下，"
-            f"下不到就是整份配置加载失败。\n"
-            f"跑 `mihomo-cli rules fetch` 拿（下到项目的 geodata/，apply 会装过去；"
-            f"raw 拿不到就加 --proxy）。手动也行：\n"
-            f"curl -L -o {GEODATA_DIR / f} {GEOX_URL[f]}"
-        )
-    return out
-
-
 def report_problems(problems: list[dict]) -> None:
     for p in problems:
         if p["kind"] == "missing":
@@ -1308,7 +1239,7 @@ def http_get(url: str, proxy: str | None, timeout: float = 30) -> bytes:
 
 
 def cmd_rules_fetch(args: argparse.Namespace) -> int:
-    """从 ACL4SSR 拉片段、从 meta-rules-dat 拉 geodata。
+    """从 ACL4SSR 拉那 18 个片段。
 
     拉下来的就是**上游原文**，一个字不改：这样镜像片段能直接和上游 diff，
     “本地有没有偏离上游”一目了然。上游里那些 mihomo 不支持的类型
@@ -1352,31 +1283,6 @@ def cmd_rules_fetch(args: argparse.Namespace) -> int:
         else:
             print(f"  {ok('~')} {rel}  更新  {size_str(len(old))} → {size_str(len(data))}")
             updated += 1
-
-    # geodata：只下有规则在用、且本地/配置目录都没有的
-    order, _ = read_order()
-    used_types = set()
-    for entry, _ in order:
-        lines = [entry[2:]] if entry.startswith("[]") else (
-            fragment_rules(RULES_DIR / entry) if (RULES_DIR / entry).exists() else [])
-        used_types |= {l.split(",")[0].upper() for l in lines}
-    for f in sorted({RULE_GEODATA[t] for t in used_types if t in RULE_GEODATA}):
-        have = (GEODATA_DIR / f).exists() or (MIHOMO_DIR / f).exists()
-        if have and not args.geodata:
-            continue
-        if args.dry_run:
-            print(warn(f"  ~ geodata/{f}  会下载"))
-            continue
-        try:
-            blob = http_get(GEOX_URL[f], proxy)
-        except (urllib.error.URLError, OSError) as e:
-            print(bad(f"  ✗ geodata/{f}  下载失败：{e}"))
-            failed += 1
-            continue
-        GEODATA_DIR.mkdir(parents=True, exist_ok=True)
-        (GEODATA_DIR / f).write_bytes(blob)
-        print(f"  {ok('+')} geodata/{f}  {size_str(len(blob))}")
-        updated += 1
 
     print()
     tail = f"新增 {added} / 更新 {updated} / 未变 {same}"
@@ -1609,10 +1515,6 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
     if problems:
         report_problems(problems)
         print()
-    for n in install_geodata(rules):
-        print(f"{ok('✓')} {n}")
-    for w in geodata_warnings(rules):
-        print(warn("  ⚠ " + w.replace("\n", "\n    ")))
 
     bak = backup_config()
     print(f"{ok('✓')} 已备份 {dim(str(bak))}")
@@ -1668,7 +1570,7 @@ def main(argv: list[str] | None = None) -> int:
         epilog=(
             "网卡名用 `mihomo-cli nics` 查；不传网卡名时用当前活跃网卡（没有就直接失败），"
             "stop 则关掉之前 start 过的。\n"
-            "规则：新机器先 `rules fetch` 把 ACL4SSR 片段和 geodata 拉下来，"
+            "规则：新机器先 `rules fetch` 把 ACL4SSR 片段拉下来，"
             "再 `rules diff` 看差异，没问题才 `rules apply`。"
         ),
     )
@@ -1695,9 +1597,8 @@ def main(argv: list[str] | None = None) -> int:
                             help="指定回滚到哪个备份；不写则用最近的一个")
             rr.add_argument("--reload", action="store_true", help="回滚后热重载运行中的 mihomo")
             rsub.add_parser("order", help="打印当前生效的片段顺序与各自的规则数")
-            rf = rsub.add_parser("fetch", help="从 ACL4SSR 拉片段、从 meta-rules-dat 拉 geodata")
+            rf = rsub.add_parser("fetch", help="从 ACL4SSR 拉那 18 个片段（写上游原文）")
             rf.add_argument("--dry-run", action="store_true", help="只列出会下载/更新什么，不写文件")
-            rf.add_argument("--geodata", action="store_true", help="geodata 也重新下（默认只在缺的时候下）")
             rf.add_argument("--proxy", metavar="URL", default=None,
                             help="下载走这个代理，如 http://127.0.0.1:7890；默认直连")
 
