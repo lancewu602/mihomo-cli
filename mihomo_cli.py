@@ -11,6 +11,7 @@ start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
     restart [--keep-log]  重启内核服务（让新配置生效）；默认顺手清空日志
     status [网卡名]   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
     logs   [--truncate]  内核日志在哪、多大；--truncate 清空
+    group  [组名] [编号|选项 | --test]  策略组：列组 / 看选项 / 切换 / 测速（选项可报编号）
 
     sub     list|add|nodes|update|rm    订阅：改 proxy-providers 与各组的 use:
     rules   sync|diff|apply|rollback    片段 → config.yaml 的 rules:（顺序表在 rules.py）
@@ -31,6 +32,7 @@ import sys
 
 from core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from geodata import FILE_NAMES, MIRRORS, cmd_geodata
+from groups import cmd_group
 from kernel import cmd_logs, cmd_restart
 from nics import cmd_nics
 from rules import cmd_rules
@@ -44,6 +46,7 @@ from systemproxy import cmd_start, cmd_stop
 SUBCOMMANDS = {
     "nics": ("列网卡（macOS 网络服务 / Linux 接口与路由）", cmd_nics),
     "geodata": ("geodata 数据文件：list / download / apply", cmd_geodata),
+    "group": ("策略组：列组 / 看选项 / 切换 / 测速", cmd_group),
     "logs": ("看内核日志在哪、多大；--truncate 清空", cmd_logs),
     "rules": ("规则树：sync 同步片段 / diff 对比 / apply 落地 / rollback 回滚", cmd_rules),
     "sub": ("订阅：add 加 / list 列 / nodes 看节点 / update 刷在用的 / rm 删", cmd_sub),
@@ -56,7 +59,7 @@ SUBCOMMANDS = {
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics", "subs": "sub"}
 
 # 这些子命令不收"网卡名"这个位置参数
-NO_SERVICE_ARG = {cmd_nics, cmd_rules, cmd_sub, cmd_restart, cmd_geodata, cmd_logs}
+NO_SERVICE_ARG = {cmd_nics, cmd_rules, cmd_sub, cmd_restart, cmd_geodata, cmd_logs, cmd_group}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             rf.add_argument("--dry-run", action="store_true", help="只列出会同步/更新什么，不写文件")
             rf.add_argument("--from", dest="from_dir", metavar="目录", required=True,
                             help="ACL4SSR clone 的位置（必填，如 ~/GitHub/ACL4SSR）；不联网")
+        if fn is cmd_group:
+            p.add_argument("name", nargs="?", metavar="组名", help="不给就列所有组")
+            p.add_argument("option", nargs="?", metavar="选项",
+                           help="切到哪个：选项编号（看 group <组名> 那列）或名字的一段")
+            p.add_argument("--test", action="store_true", help="触发测速，按延迟排序")
         if fn is cmd_restart:
             p.add_argument("--keep-log", action="store_true",
                            help="保留旧日志（默认重启前清空，免得越滚越大）")

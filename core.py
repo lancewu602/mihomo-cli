@@ -218,17 +218,36 @@ def can_check_listener() -> bool:
     return bool(shutil.which("lsof") or shutil.which("ss"))
 
 
-def api(path: str) -> dict | None:
-    """调 mihomo 的 REST API。任何异常都返回 None——status 不该因为内核没起来就崩掉。"""
+def api_raw(path: str, method: str = "GET", payload: dict | None = None,
+            timeout: float = 2) -> tuple[int, dict | None]:
+    """调内核 API，返回 (HTTP 状态码, JSON)。连不上时状态码是 0。
+
+    状态码得留着：测速失败内核回的是 400 加一句 message，跟"内核没起来"不是一回事。
+    """
     controller = read_config("external-controller") or f"{HOST}:9090"
-    req = urllib.request.Request(f"http://{controller}{path}")
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(f"http://{controller}{path}", data=body, method=method)
+    if body:
+        req.add_header("Content-Type", "application/json")
     if secret := read_config("secret"):
         req.add_header("Authorization", f"Bearer {secret}")
     try:
-        with urllib.request.urlopen(req, timeout=2) as r:
-            return json.load(r)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except (json.JSONDecodeError, ValueError):
+            return e.code, None
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
-        return None
+        return 0, None
+
+
+def api(path: str) -> dict | None:
+    """调 mihomo 的 REST API。任何异常都返回 None——status 不该因为内核没起来就崩掉。"""
+    status, data = api_raw(path)
+    return data if status == 200 else None
 
 
 def config_path() -> Path:
