@@ -623,14 +623,15 @@ def probe(port: int) -> tuple[bool, str]:
 # ─────────────────────────── 子命令 ───────────────────────────
 
 
-def require_macos(what: str) -> None:
+def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理设置") -> None:
     """系统代理开关只能靠 macOS 的 networksetup，别的平台上要说清而不是崩。
 
     不拦的话在 Linux 上会是 FileNotFoundError 回溯，看不懂发生了什么。
+    why 可覆盖：nics 是“列网卡”，并不改设置，用默认那句就写歪了。
     """
     if not IS_MACOS:
         die(
-            f"{what} 只在 macOS 上可用：它靠 networksetup 改系统的代理设置。\n"
+            f"{what} 只在 macOS 上可用：{why}。\n"
             f"  Linux 上请直接管 mihomo 的配置：\n"
             f"    mihomo-cli rules diff      # 看差异\n"
             f"    mihomo-cli rules apply     # 应用规则\n"
@@ -639,7 +640,7 @@ def require_macos(what: str) -> None:
 
 
 def cmd_nics(_: argparse.Namespace) -> int:
-    require_macos("nics")
+    require_macos("nics", "它列的是 networksetup 的网络服务")
     services = list_services()
     print(dim("macOS 网卡（start / stop 的参数就是下面的名字，带空格要加引号）"))
     print()
