@@ -122,8 +122,10 @@ def current_node() -> tuple[list[str], int | None] | None:
 
 def probe(port: int) -> tuple[bool, str]:
     """真发一个请求走代理，确认链路是通的。返回 (通不通, 说明文字)。"""
+    # http/https 都要映射：ProxyHandler 是按 scheme 注册 handler 的，只给 http 的话
+    # https 请求会落到默认的直连 handler —— 那探测就根本没走代理
     opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": f"http://{HOST}:{port}"})
+        urllib.request.ProxyHandler({s: f"http://{HOST}:{port}" for s in ("http", "https")})
     )
     t0 = time.time()
     try:

@@ -88,7 +88,9 @@ def discover_tool_dir() -> Path:
 
 TOOL_DIR = discover_tool_dir()
 STATE_FILE = TOOL_DIR / "state.json"       # macOS 系统代理的原状态，stop 时还原成它
-TEST_URL = os.environ.get("MIHOMO_TEST_URL", "http://www.gstatic.com/generate_204")  # 连通性探测目标
+# 连通性/测速目标。默认 https：内核的 unified-delay 要发两次请求核对，http 下容易只拿到第一次
+# （日志里会报 "failed to get the second response"），并且会提示改用 HTTPS
+TEST_URL = os.environ.get("MIHOMO_TEST_URL", "https://www.gstatic.com/generate_204")
 PROBE_TIMEOUT = 4.0                   # 探测超时（秒）
 
 # ─────────────────────────── 输出小工具 ───────────────────────────
