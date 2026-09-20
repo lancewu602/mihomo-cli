@@ -1,9 +1,6 @@
 """订阅：proxy-providers 的增删查改（add / list / nodes / update / rm）。
 
-订阅在配置里就是 proxy-providers 里的一项：内核按 url 自己把节点拉下来，代理组用
-`use: [名字]` 引用它。所以这里要动的只有两处——proxy-providers 的块，和各组 use:
-列表。config.yaml 有 10 万行，所以全部按行改、不引 YAML 库：没动到的地方一个
-字节都不变（理由详见下面的长注释）。
+只改 config.yaml 的两处——provider 块和各组 use: 列表；全部按行改，不引 YAML 库。
 """
 from __future__ import annotations
 
@@ -26,19 +23,10 @@ from kernel import mihomo_pid
 
 # ───────────────────── 订阅：proxy-providers ─────────────────────
 #
-# 「订阅」在这份配置里就是 proxy-providers 里的一项：内核按 url 自己把节点拉下来，
-# 代理组用 `use: [名字]` 引用它。所以 sub add/rm 要动的正好是两处：
-#   proxy-providers: 里的块   +   proxy-groups: 里各组的 use 列表。
-# 别的地方一个字节都不碰。
-#
-# 为什么不把节点内联进 proxies: —— 那要每次机场换节点都手改这份 5MB 的配置，
-# 还会把上千个节点名灌进 rules 的 diff 里。provider 让内核自己刷新，
-# 配置里只留一行 url。
-#
-# 全部按行改，不引 YAML 库（保持零第三方依赖）：这份 config.yaml 有 10 万行，
-# 用 PyYAML 读进来再 dump 出去，注释、缩进、空行全会被重写一遍——那是灾难。
-# 按行改，没动到的地方一个字节都不变。代价是只认块状写法，不认 `${name}: {…}`
-# 这种流式写法；碰到就报错退出，绝不猜。
+# 「订阅」= proxy-providers 的一项：内核按 url 拉节点，代理组用 `use: [名字]` 引用。
+# 所以 add/rm 只动两处——provider 块和各组 use 列表，别的地方一个字节不碰。
+# 全部按行改、不引 YAML 库（PyYAML 重 dump 会把 10 万行的注释和排版全丢掉）；
+# 只认块状写法，碰到流式写法直接报错，绝不猜。
 
 SUB_UA = "clash-verge/v2.4.7"        # 机场普遍按 UA 发配置，用个常见客户端的
 SUB_INTERVAL = 3600                  # 内核刷新订阅的间隔（秒）
@@ -50,11 +38,7 @@ SUB_NAME_MAX = 64                    # 订阅名长度上限（按字符数，�
 def _check_sub_name(name: str) -> str:
     """检查订阅名。名字只在 add 时给一次，这里要挡的是「写进配置会坏掉的东西」。
 
-    名字会同时出现在三处：proxy-providers 的键、代理组 use: 里的项、命令行参数。
-    前两处写的时候一律加引号，所以中文、空格、括号都能用；真正不能要的只有
-    空名字和换行这类控制字符。文件名是另外派生的（见 _sub_file_name），
-    不受这里放宽的影响。
-    """
+    前两处写的时候一律加引号，所以中文、空格、括号都能用；真正不能要的只有"""
     name = name.strip()
     if not name:
         die("订阅名不能是空的。")
@@ -66,12 +50,7 @@ def _check_sub_name(name: str) -> str:
 
 
 def _sub_file_name(name: str, taken: set[str]) -> str:
-    """给订阅挑个缓存文件名（配置里写 ./providers/<它>）。
-
-    名字可以是中文，但文件名得挑安全的：先把非 [A-Za-z0-9._-] 换成 `-`；
-    一个 ASCII 字母数字都不剩（纯中文名）时用名字的短哈希，免得好几个中文名
-    都变成 `--.yaml` 撞在一起；还撞就再缀 -2、-3。
-    """
+    """给订阅挑个缓存文件名（配置里写 ./providers/<它>）。"""
     base = re.sub(r"[^A-Za-z0-9._-]", "-", name).strip("-.")
     if not re.search(r"[A-Za-z0-9]", base):
         base = "sub-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
@@ -83,12 +62,7 @@ def _sub_file_name(name: str, taken: set[str]) -> str:
 
 
 def _unquote(v: str) -> str:
-    """去掉 YAML 标量的引号，顺便把转义还原。
-
-    双引号走 json.loads：YAML 的双引号标量和 JSON 字符串在这一层基本一致，
-    正好把 `\"`、`\\` 这些还原回去（不然 `"my\"sub"` 会被读成 `my\"sub`，
-    再 sub add 就找不到同名订阅了）。
-    """
+    """去掉 YAML 标量的引号，顺便把转义还原。"""
     v = v.strip()
     if len(v) >= 2 and v[0] == v[-1] == '"':
         try:
@@ -109,11 +83,7 @@ def _scalar_of(v: str) -> str:
 
 
 def _top_sections(lines: list[str]) -> list[tuple[str, int, int]]:
-    """把 config.yaml 切成 [(顶层键, 头行, 结束行)]，顺序即文件顺序。
-
-    只看顶格（列 0）的 `key:`。列表项一律以 `- ` 开头，够把 rules: 那 10 万行
-    整个跳过——不解析，也不复制。
-    """
+    """把 config.yaml 切成 [(顶层键, 头行, 结束行)]，顺序即文件顺序。"""
     heads = [(i, m.group(1)) for i, l in enumerate(lines)
              if (m := re.match(r"^([A-Za-z_][A-Za-z0-9_.-]*):(.*)$", l))]
     return [(key, i, heads[k + 1][0] if k + 1 < len(heads) else len(lines))
@@ -128,11 +98,7 @@ def _section_span(lines: list[str], key: str) -> tuple[int, int] | None:
 
 
 def _parse_providers(lines: list[str]) -> list[dict]:
-    """解析 proxy-providers：返回 [{name, url, path, …, head, end}]，按文件顺序。
-
-    只认块状写法（`  名字:` 下面缩进写字段）。碰到流式写法直接 die：
-    猜错的后果是写出一个 mihomo 读不了的配置，而这里没法回滚到磁盘之外。
-    """
+    """解析 proxy-providers：返回 [{name, url, path, …, head, end}]，按文件顺序。"""
     span = _section_span(lines, "proxy-providers")
     if span is None:
         return []
@@ -184,10 +150,7 @@ def _parse_providers(lines: list[str]) -> list[dict]:
 
 
 def _parse_groups(lines: list[str]) -> list[dict] | None:
-    """解析 proxy-groups：返回 [{name, type, start, orig_len, lines}]，没有这节返回 None。
-
-    lines 是这一组的原始行切片：改完再用 _apply_edits 从后往前写回去。
-    """
+    """解析 proxy-groups：返回 [{name, type, start, orig_len, lines}]，没有这节返回 None。"""
     span = _section_span(lines, "proxy-groups")
     if span is None:
         return None
@@ -214,11 +177,7 @@ def _group_field(blk: list[str], key: str) -> str | None:
 
 
 def _list_span(blk: list[str], key: str) -> tuple[int, int, str, list[int], list[str]] | None:
-    """在组里找 `key:` 那个列表：返回 (键行, 缩进, 风格, 项行下标, 现有项)。
-
-    风格：block = `use:` 独占一行、下面 `- 项`；inline = `use: [a, b]`；
-    scalar = `use: a`（少见但合法）。找不到返回 None。
-    """
+    """在组里找 `key:` 那个列表：返回 (键行, 缩进, 风格, 项行下标, 现有项)。"""
     pat = re.compile(rf"^(\s*){key}:\s*(.*?)\s*$")
     for i, l in enumerate(blk):
         if l.startswith("- "):            # 组的第一行 `- name: …`
@@ -270,11 +229,7 @@ def _block_indent(blk: list[str]) -> int:
 
 
 def _use_edit(blk: list[str], add: list[str] = (), remove: set[str] | frozenset[str] = ()) -> dict:
-    """就地改一个组的 use 列表。返回 {added, removed, created, emptied}。
-
-    三种写法都会顺手升级成块状/内联的正确形态；列表被清空时连 `use:` 键一起删掉，
-    不留 `use: []` 这种看着像配了、其实一个节点都没有的东西。
-    """
+    """就地改一个组的 use 列表。返回 {added, removed, created, emptied}。"""
     rm = set(remove)
     span = _list_span(blk, "use")
     if span is None:
@@ -345,12 +300,7 @@ def _yaml_list(items: list[str]) -> str:
 
 def _render_provider(name: str, url: str, proxy: str | None = None, base: int = 2,
                      field_ind: int | None = None, path: str | None = None) -> list[str]:
-    """渲染一个 provider 块（含行尾换行）。base 是名字那一行的缩进。
-
-    字段照抄现网那份跑得通的配置：UA 用常见客户端（机场不认的 UA 会只给几个节点
-    甚至拒发）、exclude-filter 滤掉「剩余流量 / 官网地址」这类假节点、
-    health-check 打 204 且 lazy——启动时不挨个测速，用得着才测。
-    """
+    """渲染一个 provider 块（含行尾换行）。base 是名字那一行的缩进。"""
     f = " " * (base + 2 if field_ind is None else field_ind)
     g = f + "  "
     out = [f"{' ' * base}{_yaml_scalar(name)}:\n",
@@ -377,8 +327,7 @@ def _render_provider(name: str, url: str, proxy: str | None = None, base: int = 
 def _same_block(old: list[str], new: list[str]) -> bool:
     """两个 provider 块语义上是不是一样（忽略空行和行内多余空白）。
 
-    一样就别写盘：这份配置有 5MB，每写一次都要备份一份，白写一次就多一份 5MB。
-    """
+    一样就别写盘：这份配置有 5MB，每写一次都要备份一份，白写一次就多一份 5MB。"""
     def norm(ls: list[str]) -> list[str]:
         return sorted(x.rstrip() for x in ls if x.strip())
 
@@ -392,11 +341,7 @@ def _rendered_keys(block: list[str], field_ind: int) -> set[str]:
 
 
 def _carry_over(old: list[str], field_ind: int, rendered: set[str]) -> list[str]:
-    """把旧 provider 块里「我们不渲染的字段」原样带过去。
-
-    重写一个已存在的块时，`proxy:`（内核拉订阅时要走的节点）这类字段一旦被覆盖掉，
-    订阅可能就再也拉不下来了。所以只覆盖我们认识的字段，不认识的连注释一起留着。
-    """
+    """把旧 provider 块里「我们不渲染的字段」原样带过去。"""
     chunks: list[tuple[str | None, list[str]]] = []
     for l in old:
         m = re.match(r"^\s*([A-Za-z0-9_-]+):", l)
@@ -444,9 +389,7 @@ def _provider_cache(prov: dict) -> Path:
 def _sub_name_from_url(url: str, taken: set[str]) -> str:
     """从链接推个默认名字：域名（去掉非 [A-Za-z0-9._-] 的字符）。
 
-    用域名而不是「机场A」这类名字：它能从链接唯一算出来，同一个链接重跑
-    还是同一个名字（幂等，不会越加越多），而且撞名时能自动 -2、-3。
-    """
+    用域名而不是「机场A」这类名字：它能从链接唯一算出来，同一个链接重跑"""
     host = urllib.parse.urlsplit(url).hostname or "sub"
     base = re.sub(r"[^A-Za-z0-9._-]", "-", host).strip("-.") or "sub"
     name, n = base, 2
@@ -472,12 +415,7 @@ def _http_get_sub(url: str, proxy: str | None, timeout: float = 30) -> tuple[byt
 def _try_subscription(url: str, proxy: str | None) -> tuple[tuple[bytes, str, str] | None, list[str]]:
     """试所有路线拉一次订阅，返回 ((内容, userinfo, 路线) 或 None, 失败原因列表)。
 
-    先直连，不行再退本机 mihomo 的 mixed-port（只在没显式 --proxy 时试）：
-    机场的订阅站自己常被墙，而这时候本机 mihomo 往往已经在跑、还有能用的节点。
-    退路只影响这次预下载，**不**偷偷把代理写进配置。
-
-    显式给了 --proxy 就只走它：用户说了算，别在背后换出口。
-    """
+    显式给了 --proxy 就只走它：用户说了算，别在背后换出口。"""
     routes: list[tuple[str | None, str]] = []
     if proxy:
         routes.append((proxy, f"代理 {proxy}"))
@@ -529,10 +467,7 @@ def _b64_text(s: str) -> str:
 
 
 def _sub_text(raw: bytes) -> str:
-    """把订阅原文归一成文本：base64 订阅解出来，别的原样返回。
-
-    机场两种给法都常见：base64 的分享链接列表，和 clash 的 yaml。
-    """
+    """把订阅原文归一成文本：base64 订阅解出来，别的原样返回。"""
     text = raw.decode("utf-8", "replace").strip()
     compact = re.sub(r"\s+", "", text)
     if len(compact) >= 16 and re.fullmatch(r"[A-Za-z0-9+/\-_]+={0,2}", compact):
@@ -573,11 +508,7 @@ def _link_node(link: str) -> tuple[str, str]:
 
 
 def _nodes_from_sub(raw: bytes) -> list[tuple[str, str]]:
-    """离线从订阅原文里抠出 [(名字, 类型)]，内核没在跑时靠它列节点。
-
-    只认两种：base64 的分享链接、clash 的 yaml。抠不出来就给空列表——
-    调用方会退化成"只有条数没有名字"，而不是报一个看不懂的错。
-    """
+    """离线从订阅原文里抠出 [(名字, 类型)]，内核没在跑时靠它列节点。"""
     text = _sub_text(raw)
     if not text:
         return []
@@ -620,12 +551,7 @@ def _nodes_from_sub(raw: bytes) -> list[tuple[str, str]]:
 
 
 def _count_nodes(raw: bytes) -> tuple[int | None, str]:
-    """数订阅里有多少节点，返回 (条数, 认出是什么格式)。认不出来给 None。
-
-    机场主要给两种：base64 的分享链接（ss://… 一行一条）和 clash 的 yaml。
-    这里只做「像不像」的判断——错了的代价只是列表里那个数字不准，
-    不用为它写一个完整的解析器。
-    """
+    """数订阅里有多少节点，返回 (条数, 认出是什么格式)。认不出来给 None。"""
     text = _sub_text(raw)
     if not text:
         return None, "空"
@@ -675,12 +601,7 @@ def _api_provider_nodes(name: str) -> int | None:
 
 
 def _refresh_provider(name: str) -> tuple[str, int]:
-    """让内核重新拉这个订阅。返回 (走通了哪条路, provider 接口的状态码)。
-
-    先试精确的 provider 刷新；内核还不认识这个名字（比如刚 add 完没重载）、
-    或者它自己拉不动订阅（接口返回 503）时，退一步热重载整份配置——
-    那是更重但基本总能成的办法，而且热重载会读我们刚写好的缓存文件。
-    """
+    """让内核重新拉这个订阅。返回 (走通了哪条路, provider 接口的状态码)。"""
     code = controller_put(f"/providers/proxies/{urllib.parse.quote(name, safe='')}")
     if 200 <= code < 300:
         return "api", code
@@ -709,11 +630,7 @@ def _match_provider(provs: list[dict], what: str) -> dict:
 def _pick_groups(groups: list[dict] | None, wanted: list[str] | None) -> tuple[list[dict], str]:
     """决定新订阅挂到哪些组。
 
-    默认只挂「已经有 use: 的组」——那些才是把 provider 当节点池的组。
-    不往 `全球直连` / `全球拦截` 这种只有 DIRECT/REJECT 的组里塞节点：
-    那不是它们的用途，加了就是往一个不该出节点的组里塞节点。
-    真要挂别的组，显式 --group，缺 use: 就顺手建一个。
-    """
+    真要挂别的组，显式 --group，缺 use: 就顺手建一个。"""
     if groups is None:
         return [], "config.yaml 里没有 proxy-groups: 这一节，改成手工配置"
     if wanted:
@@ -750,12 +667,7 @@ def _clip(s: str, n: int) -> str:
 
 
 def cmd_sub_nodes(args: argparse.Namespace) -> int:
-    """列出某个订阅的节点。
-
-    优先问内核：它手里是过滤、去重之后的真实节点，还带存活和最近一次测速延迟。
-    内核没在跑（或还不认识这个 provider）就退回本地缓存文件里抠名字——离线可用，
-    代价是没有延迟数据。
-    """
+    """列出某个订阅的节点。"""
     cfg = require_config()
     provs = _parse_providers(cfg.read_text(encoding="utf-8").splitlines(keepends=True))
     if not provs:
@@ -1002,20 +914,7 @@ def cmd_sub_rm(args: argparse.Namespace) -> int:
 
 
 def cmd_sub_update(_: argparse.Namespace) -> int:
-    """刷新「当前在用」的订阅——就是被代理组 use: 引用到的那些，立刻拉一遍。
-
-    只干刷新这一件事，不带开关、也不碰 config.yaml：订阅地址、挂哪些组都归
-    sub add / sub rm 管（要换地址就 rm 再 add，免得一条命令里塞两件事，
-    还得顺带处理备份和回滚）。
-
-    刷新分两层，按「谁更可靠」的顺序都试：
-      1. 预下载 → 覆盖 providers/<名字>.yaml 缓存（内核下次启动直接拿它）
-      2. 内核在跑 → PUT /providers/proxies/<名字> 让它当场重新拉；
-         内核自己拉不动（接口 503）或还不认识它时，退一步热重载整份配置，
-         热重载正好会读我们刚写好的缓存。
-    预下载失败**不**直接退出：内核有它自己的路线（provider 里的 `proxy: 节点`），
-    工具直连连不上、内核却拉得动是常事。只要内核刷新成功就算成功。
-    """
+    """刷新「当前在用」的订阅——就是被代理组 use: 引用到的那些，立刻拉一遍。"""
     cfg = require_config()
     lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
     provs = _parse_providers(lines)

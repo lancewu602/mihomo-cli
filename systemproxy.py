@@ -1,8 +1,6 @@
-"""macOS 系统代理这一层：列网络服务、读写三种代理、存档与还原。
+"""macOS 系统代理这一层：列网络服务、读写三种代理、状态存档与还原、start/stop。
 
-「按网卡设系统代理」只有 macOS 有（靠 networksetup）；Linux 服务端没有对应物，
-那边 start/stop 只管内核服务。start 会先确保内核在跑再指代理——指到一个没人
-监听的端口等于断网，这是这个文件里所有检查存在的理由。
+「按网卡设系统代理」只有 macOS 有（networksetup）；Linux 那边 start/stop 只管内核服务。
 """
 from __future__ import annotations
 
@@ -16,6 +14,8 @@ from core import (HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_por
 from kernel import ensure_kernel_up, probe, service_manager, stop_kernel
 
 
+# 开代理时写入的绕过列表：这些地址根本不发给 mihomo（跟顺序表第 1 条 LocalAreaNetwork 对齐）。
+# 好处：内网请求少一跳，mihomo 重启那几秒里 NAS / 路由器也不会跟着断。
 BYPASS = [
     "localhost",
     "127.0.0.1",
@@ -43,6 +43,7 @@ KINDS = {
     "SOCKS": ("socksfirewallproxy", "socksfirewallproxystate"),
 }
 
+
 def ns(*args: str) -> str:
     """执行 networksetup 并返回 stdout；失败直接抛错退出。"""
     p = run("networksetup", *args)
@@ -52,10 +53,8 @@ def ns(*args: str) -> str:
 
 
 # ─────────────────────────── 网卡枚举 ───────────────────────────
-# 术语说明：macOS 官方管这里的名字叫「网络服务」（network service），
-# en0 / en6 / bridge0 才是网卡设备，一个设备可以对应多个网络服务。
-# 本工具对用户统一叫「网卡」，因为它就是 networksetup 收的那个参数。
-# 代码里参数名仍保留 service，以便和 networksetup 自己的术语对上号。
+# 术语：macOS 管这里的名字叫「网络服务」（network service），en0 / bridge0 才是设备，
+# 一个设备可对应多个网络服务；本工具统一叫「网卡」（networksetup 收的就是这个名字）。
 
 
 def active_device() -> str:
@@ -68,12 +67,7 @@ def active_device() -> str:
 
 
 def list_services() -> list[dict]:
-    """列出所有网卡：[{name, device, enabled, active}]。
-
-    两条命令拼起来：
-      -listallnetworkservices   名字列表，行首带 * 表示已停用
-      -listnetworkserviceorder  名字 ↔ 设备名 的对应关系
-    """
+    """列出所有网卡：[{name, device, enabled, active}]。"""
     services: list[dict] = []
     for line in ns("-listallnetworkservices").splitlines():
         line = line.strip()
@@ -106,23 +100,14 @@ def list_services() -> list[dict]:
 
 
 def norm_service(s: str) -> str:
-    """网卡名归一化，用于模糊匹配：忽略大小写、空格、连字符、下划线、点、斜杠。
-
-    "Wi-Fi" / "wifi" / "Wi Fi" / "WI_FI" 都归一化成 "wifi"。
-    只靠 casefold() 不够——它不会把连字符也吃掉，于是 wifi 匹配不到 Wi-Fi。
-    """
+    """网卡名归一化，用于模糊匹配：忽略大小写、空格、连字符、下划线、点、斜杠。"""
     return re.sub(r"[\s\-_/.]+", "", s.casefold())
 
 
 def active_service(services: list[dict] | None = None) -> dict | None:
     """当前活跃的那张网卡——即走默认路由的那张。没有就返回 None。
 
-    这里刻意不做任何猜测：不传网卡名时只认这个唯一可靠的信号。
-    一旦退回「第一个启用的」或者写死某个名字，就可能对着根本没用上的
-    网卡配半天，或者把系统代理指到不通的地方去。宁可报错让用户说清楚。
-
-    可以传入已经取好的 services 列表，省一次 networksetup 调用。
-    """
+    这里刻意不做任何猜测：不传网卡名时只认这个唯一可靠的信号。"""
     for s in (services if services is not None else list_services()):
         if s["active"] and s["enabled"]:
             return s
@@ -163,14 +148,7 @@ def match_service(name: str, services: list[dict]) -> dict:
 def resolve_stop_targets(name: str | None) -> tuple[list[dict], str | None]:
     """stop 该关哪些网卡（可能不止一张，也可能一张都没有）。
 
-    不传网卡名时不能只看「当前活跃网卡」：你可能是开着 Wi-Fi 的代理之后
-    插了网线，这时活跃网卡已经变了，只关新的那个就会把 Wi-Fi 上的代理漏掉，
-    而它下次连上 Wi-Fi 时又会悄悄生效。所以优先关掉「之前 start 过、
-    状态文件里有记录」的网卡——那才是这条命令真正该收尾的东西。
-    没有记录时才退回活跃网卡（对没开代理的网卡来说是幂等空操作）。
-
-    返回 (网卡列表, 说明)；列表为空表示没东西可关（这不算失败）。
-    """
+    不传网卡名时不能只看当前活跃网卡：可能你还开着别的网卡的代理，得一起收尾。"""
     if name is not None:
         return [match_service(name, list_services())], None
 
@@ -240,9 +218,8 @@ def proxy_summary(service: str) -> str:
 
 
 # ─────────────────────────── 状态文件 ───────────────────────────
-# start 会把「该网卡原本的设置」存下来，stop 时原样还回去，免得这个脚本
-# 覆盖掉你手工配过的绕过规则和代理地址。结构是按网卡名分桶：
-#   {"Wi-Fi": {"bypass": [...]|null, "servers": {"HTTP": {...}, ...}, "saved_at": "..."}}
+# start 前把该网卡的原设置存下来（绕过列表 + 三种代理地址），stop 时原样还回去，
+# 免得覆盖你手工配过的东西。结构：{"Wi-Fi": {"bypass": [...], "servers": {...}, ...}}
 
 
 def load_state() -> dict:
@@ -297,11 +274,7 @@ def forget_state(service: str) -> None:
 
 
 def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理设置") -> None:
-    """系统代理开关只能靠 macOS 的 networksetup，别的平台上要说清而不是崩。
-
-    不拦的话在 Linux 上会是 FileNotFoundError 回溯，看不懂发生了什么。
-    why 可覆盖：nics 是“列网卡”，并不改设置，用默认那句就写歪了。
-    """
+    """系统代理开关只能靠 macOS 的 networksetup，别的平台上要说清而不是崩。"""
     if not IS_MACOS:
         die(
             f"{what} 只在 macOS 上可用：{why}。\n"
@@ -314,11 +287,7 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    """开系统代理；内核没跑就先把它拉起来。
-
-    macOS：先把内核拉起来（没跑就交给 brew services），再按网卡开系统代理。
-    Linux：系统代理那套是 networksetup 专有的，start 就只是把 systemd 服务拉起来。
-    """
+    """开系统代理；内核没跑就先把它拉起来。"""
     if not IS_MACOS:
         port = proxy_port()
         already = ensure_kernel_up(port)
@@ -372,10 +341,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 def teardown(service: str) -> str:
     """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。stop 和回滚共用。
 
-    顺序很关键：networksetup -setwebproxy <host> <port> 在写入地址的同时
-    会把代理一并打开，所以"写地址"必须发生在"关开关"之前，否则关完又被它打开
-    （这个坑实测踩过：stop 打印了"已关闭"，scutil --proxy 里 Enable 还是 1）。
-    """
+    顺序要紧：networksetup 写地址会顺手把代理打开，所以必须先写地址、再关开关。"""
     had_state, original, servers = load_original_state(service)
 
     if not had_state:
@@ -411,9 +377,7 @@ def teardown(service: str) -> str:
 def cmd_stop(args: argparse.Namespace) -> int:
     """关系统代理（macOS）并停掉内核服务。
 
-    顺序不能反：先把系统代理摘干净，再停内核。反过来的话，停内核那几秒里
-    机器上所有请求还指着已经没人监听的端口，等于断网。
-    """
+    顺序不能反：先把系统代理摘干净，再停内核。反过来的话，停内核那几秒里"""
     code = 0
     if IS_MACOS:
         targets, why = resolve_stop_targets(args.service)

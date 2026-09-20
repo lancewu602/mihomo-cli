@@ -7,11 +7,8 @@ venv/
 # macOS
 .DS_Store
 
-# rules/ 里 ACL4SSR 的镜像片段：从上游可重新拉取，不入库
-# （ACL4SSR 是 GPL 项目，镜像进来会把许可一起带进来）
-# 自己的 Custom.list 和 order.txt 要跟踪，所以下面单独放行
-rules/*/*.list
-!rules/*/Custom.list
+# 规则片段、状态、备份都不在仓库里了：它们住 ~/.config/mihomo-cli/
+# （规则是数据不是代码，仓库跟着 clone 到哪都行，数据得有个稳定住处）
 
 # mihomo 的数据文件（geoip.metadb 等）：GPL 的第三方二进制，几 MB 一个，不入库。
 # 工具不碰它们——mihomo 只认配置目录里那份，缺了它自己会去下。

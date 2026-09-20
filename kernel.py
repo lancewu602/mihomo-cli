@@ -1,15 +1,8 @@
-"""内核这一层：观测（进程 / 端口 / 控制接口 / 出口延迟）+ 服务管理。
-
-观测：内核在不在跑、监听哪个端口、当前出口是哪条链路。
-服务：让 brew services（macOS）或 systemd（Linux）把它拉起来、停下来、重启。
-
-系统代理是另一个模块的事（systemproxy.py）：那边 start/stop 时会调这里，
-这里只在 cmd_restart 里回头看一眼系统代理开没开，所以那个 import 放在函数里，
-免得两个模块在模块级互相 import 转不出来。
-"""
+"""内核这一层：观测（进程 / 端口 / 控制接口 / 出口延迟）+ 服务管理（brew services / systemd）。"""
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import time
@@ -17,20 +10,16 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from core import (HOST, IS_MACOS, PROBE_TIMEOUT, RESTART_HINT, SERVICE_HINT, TEST_URL,
-                  api, bad, can_check_listener, die, dim, listener, ok, proxy_port,
-                  run, warn)
+from core import (HOST, IS_MACOS, MIHOMO_BIN, PROBE_TIMEOUT, RESTART_HINT, SERVICE_HINT,
+                  TEST_URL, api, bad, can_check_listener, die, dim, listener, ok, proxy_port,
+                  read_config, run, size_str, warn)
 
 
 # ─────────────────────────── 内核状态查询 ───────────────────────────
 
 
 def mihomo_pid() -> str | None:
-    """内核进程的 PID。
-
-    macOS 用 pgrep；Linux 上 pgrep（procps）在最小化安装里可能没有，
-    就到 /proc 里直接找——纯标准库，不依赖任何外部命令。
-    """
+    """内核进程的 PID。"""
     if shutil.which("pgrep"):
         p = run("pgrep", "-x", "mihomo")
         if p.returncode == 0 and p.stdout.split():
@@ -58,11 +47,7 @@ def node_delay(name: str) -> int | None:
 
 
 def current_node() -> tuple[list[str], int | None] | None:
-    """从入口组一路穿透嵌套组，返回 (链路, 叶子节点延迟)。
-
-    例：节点选择 → 自动选择 → 香港 中继-1 优化(3x)。
-    只看入口组的 now 只会得到中间组名，看不出实际出口在哪个节点。
-    """
+    """从入口组一路穿透嵌套组，返回 (链路, 叶子节点延迟)。"""
     data = api("/proxies")
     if not data:
         return None
@@ -110,20 +95,14 @@ def probe(port: int) -> tuple[bool, str]:
 
 # ─────────────── 内核服务（brew services / systemd）───────────────
 #
-# 内核常驻、开机自启、崩了重拉、日志去哪找，这些是「服务管理器」的活：
-# macOS 上是 brew services（用户级 launchd），Linux 上是 systemd。
-# start/stop/restart 走这里，**不自己 fork 一个 mihomo**——真 fork 的话，
-# 进程不归任何东西管：重启机器就没了，崩了没人拉，日志还得自己接。
+# 常驻、开机自启、崩了重拉都是「服务管理器」的活：macOS 是 brew services，Linux 是 systemd。
+# 这里只调它们，**不自己 fork mihomo**——那样进程不归任何东西管。
 
 SERVICE_NAME = "mihomo"
 
 
 def service_manager() -> tuple[str, str] | None:
-    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。
-
-    macOS 优先 brew；Linux 优先 systemd（Linuxbrew 装的机器上 systemd 也是
-    系统服务的正经入口）。
-    """
+    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。"""
     if IS_MACOS and shutil.which("brew"):
         return "brew", "brew services"
     if shutil.which("systemctl") and Path("/run/systemd/system").is_dir():
@@ -134,10 +113,7 @@ def service_manager() -> tuple[str, str] | None:
 
 
 def service_status() -> tuple[str, str]:
-    """内核服务的状态：返回 (状态, 谁管的)。
-
-    状态取 running / stopped / error / unknown / ""（最后那个 = 本机没有服务管理器）。
-    """
+    """内核服务的状态：返回 (状态, 谁管的)。"""
     mgr = service_manager()
     if mgr is None:
         return "", ""
@@ -186,11 +162,7 @@ def service_ctl(action: str) -> tuple[bool, str]:
 
 
 def wait_kernel(port: int, seconds: float = 20.0, old_pid: str | None = None) -> bool:
-    """等内核把端口监听起来（服务刚拉起时还要读 5MB 配置，几秒很正常）。
-
-    old_pid 是给 restart 用的：旧进程没死透时端口上照样是 mihomo，不等它退出
-    就会把「旧的」当成「已就绪」。
-    """
+    """等内核把端口监听起来（服务刚拉起时还要读 5MB 配置，几秒很正常）。"""
     if not can_check_listener():
         time.sleep(3)                    # 查不了就按经验等一会儿，后面 probe 会把关
         return True
@@ -211,13 +183,7 @@ def wait_kernel(port: int, seconds: float = 20.0, old_pid: str | None = None) ->
 def ensure_kernel_up(port: int, strict: bool | None = None) -> bool:
     """确保内核在跑。返回 True 表示本来就在跑（根本没动它）。
 
-    这是全工具唯一会「启动内核」的地方：端口上什么都没有时，交给 brew services /
-    systemd 去拉，然后等端口就绪。
-
-    strict（默认在 macOS 上为真）：端口被别的进程占着、或压根查不了时直接失败——
-    macOS 上接下来就要把系统代理指过去，指错等于断网。Linux 上不设代理，
-    而服务管理器的 start 本身是幂等的，所以放宽：照起，起不来再看日志。
-    """
+    全工具唯一会启动内核的地方：端口空着就交给 brew services / systemd，并等端口就绪。"""
     strict = IS_MACOS if strict is None else strict
     found = listener(port)
     if "mihomo" in {n for n, _ in found}:
@@ -275,11 +241,8 @@ def stop_kernel() -> bool:
     return True
 
 
-def cmd_restart(_: argparse.Namespace) -> int:
-    """重启内核服务：让磁盘上的配置立刻生效（rules apply / sub add 之后常用）。
-
-    只动内核，不动系统代理开关——代理指的端口没变，内核回来照样通。
-    """
+def cmd_restart(args: argparse.Namespace) -> int:
+    """重启内核服务：让磁盘上的配置立刻生效（rules apply / sub add 之后常用）。"""
     mgr = service_manager()
     if mgr is None:
         die("本机没找到 brew 或 systemd，不知道该让谁重启内核。\n"
@@ -288,6 +251,9 @@ def cmd_restart(_: argparse.Namespace) -> int:
     old = mihomo_pid()
     state, label = service_status()
     print(dim(f"内核服务  {label}（当前 {state or '未知'}）" + (f"，PID {old}" if old else "")))
+    if not getattr(args, "keep_log", False):
+        # 先清再启：新起的启动日志留得住（配置错误就在那几行里）；想留旧日志就 --keep-log
+        print(dim(f"· {truncate_log()}"))
     good, msg = service_ctl("restart")
     if not good:
         die(f"重启内核服务失败：\n  {msg}")
@@ -316,3 +282,80 @@ def cmd_restart(_: argparse.Namespace) -> int:
     return 0
 
 
+
+
+def find_log_file() -> tuple[Path | None, str]:
+    """找内核日志文件，返回 (路径 或 None, 说明)。
+
+    三种来源，从最准到兜底：
+      1. 正在跑的进程的 fd 1/2（lsof）：它就是权威答案，手工重定向也认得
+      2. brew 的 launchd plist：brew services 把 stdout/stderr 指到哪
+      3. 按内核可执行文件的路径推：/opt/homebrew/bin/mihomo → /opt/homebrew/var/log/mihomo.log
+    """
+    pid = mihomo_pid()
+    if pid and shutil.which("lsof"):
+        p = run("lsof", "-p", pid, "-a", "-d", "1,2", "-Fn")
+        for line in p.stdout.splitlines():
+            if line.startswith("n") and not line[1:].startswith(("/dev/", "pipe", "socket")):
+                return Path(line[1:]), f"内核进程 PID {pid} 的输出"
+    if not IS_MACOS and (mgr := service_manager()) and mgr[0] == "systemd":
+        # Linux：unit 若写了 StandardOutput=append:/path 就还是文件（照样没人轮转）
+        p = run("systemctl", "show", "-p", "StandardOutput", "-p", "StandardError", SERVICE_NAME)
+        for m in re.finditer(r"^Standard(?:Output|Error)=append:(.+)$", p.stdout, re.M):
+            return Path(m.group(1).strip()), "systemd unit 的输出重定向"
+    plist = Path.home() / "Library/LaunchAgents/homebrew.mxcl.mihomo.plist"
+    if plist.exists():
+        m = re.search(r"<key>StandardOutPath</key>\s*<string>([^<]+)</string>",
+                      plist.read_text(errors="replace"))
+        if m:
+            return Path(m.group(1)), "brew services 的 launchd 配置"
+    if MIHOMO_BIN:
+        guess = Path(MIHOMO_BIN).parent.parent / "var/log/mihomo.log"
+        if guess.exists():
+            return guess, "按内核路径推出来的"
+    return None, "没找到（内核没在跑，也不是 brew 装的？）"
+
+
+def truncate_log() -> str:
+    """清空内核日志，返回一行说明。找不到文件、权限不够都不算失败（重启照做）。"""
+    path, where = find_log_file()
+    if path is None:
+        return f"日志：{where}，跳过清理"
+    if not path.exists():
+        return f"日志文件不存在（{path}），跳过清理"
+    size = path.stat().st_size
+    try:
+        os.truncate(path, 0)
+    except OSError as e:
+        return f"日志清不掉（{e}）；可以 sudo truncate -s 0 {path}"
+    return f"已清空日志（{size_str(size)} → 0）"
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """看内核日志写到哪、多大；--truncate 清空它。"""
+    path, where = find_log_file()
+    level = read_config("log-level") or "（配置里没写）"
+    print(dim(f"日志级别  {level}" + (dim("    （info 会把每条连接都记一行，涨得快）")
+                                     if level == "info" else "")))
+    if path is None:
+        print(warn(f"日志位置  {where}"))
+        if not IS_MACOS:
+            print(dim("  Linux 上 systemd 默认把输出送进 journald（自己会轮转）："
+                      "journalctl -u mihomo --disk-usage"))
+        return 0
+
+    if not path.exists():
+        print(warn(f"日志文件不存在：{path}  {dim(f'（{where}）')}"))
+        return 0
+    st = path.stat()
+    print(f"日志文件  {path}  {dim(f'（{where}）')}")
+    print(f"大小      {size_str(st.st_size)}   最后写入 {time.strftime('%F %T', time.localtime(st.st_mtime))}")
+
+    if not args.truncate:
+        print(dim("  清空：mihomo-cli logs --truncate"))
+        return 0
+    msg = truncate_log()
+    print(f"{ok('✓')} {msg}" if msg.startswith("已清空") else warn(f"⚠ {msg}"))
+    if msg.startswith("已清空"):
+        print(dim("  内核不用重启：它按 O_APPEND 追加，接着从这个文件头写"))
+    return 0
