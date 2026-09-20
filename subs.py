@@ -1068,3 +1068,45 @@ def cmd_sub_list(_: argparse.Namespace) -> int:
     return 0
 
 
+def provider_overview() -> list[dict]:
+    """订阅概览，给 status 用：挂在哪些组、内核里多少节点/几个可用/最快是哪个、本地缓存。
+
+    只读，不校验不写入：配置读不到、内核没跑都只是"少显示一块"，status 不该因此出错。
+    """
+    try:
+        lines = config_path().read_text(encoding="utf-8").splitlines(keepends=True)
+        provs = _parse_providers(lines)
+        groups = _parse_groups(lines) or []
+    except OSError:
+        return []
+
+    used: dict[str, list[str]] = {}
+    for g in groups:
+        span = _list_span(g["lines"], "use")
+        for item in (span[4] if span else []):
+            used.setdefault(item, []).append(g["name"] or "(无名)")
+
+    live = (api("/providers/proxies") or {}).get("providers") or {}
+    out: list[dict] = []
+    for p in provs:
+        nodes = [n for n in ((live.get(p["name"]) or {}).get("proxies") or [])
+                 if isinstance(n, dict)]
+        delays = []
+        for n in nodes:
+            for extra in (n.get("extra") or {}).values():
+                hist = extra.get("history") or []
+                if hist and hist[-1].get("delay"):
+                    delays.append((hist[-1]["delay"], n.get("name")))
+        cache = _provider_cache(p)
+        exists = cache.exists()
+        out.append({
+            "name": p["name"],
+            "groups": used.get(p["name"], []),
+            "nodes": len(nodes) or None,
+            "alive": sum(1 for n in nodes if n.get("alive")) if nodes else None,
+            "fastest": min(delays) if delays else None,
+            "untested": len(nodes) - len(delays) if nodes else None,
+            "cache": cache.stat().st_size if exists else None,
+            "age": time.time() - cache.stat().st_mtime if exists else None,
+        })
+    return out

@@ -2,12 +2,26 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from core import (HOST, IS_MACOS, bad, can_check_listener, dim, note, ok, pad,
-                  proxy_port, read_config, warn)
-from kernel import api, current_node, listener, mihomo_pid, probe, service_status
+                  proxy_port, read_config, run, size_str, warn)
+from kernel import (api, current_node, find_log_file, listener, mihomo_pid, probe,
+                    service_status)
+from subs import provider_overview
 from systemproxy import KINDS, active_service, get_proxy, list_services, match_service
+
+
+def _ago(secs: float) -> str:
+    """"多久以前"，粗粒度就够。"""
+    if secs < 90:
+        return f"{secs:.0f} 秒前"
+    if secs < 3600:
+        return f"{secs / 60:.0f} 分钟前"
+    if secs < 86400:
+        return f"{secs / 3600:.0f} 小时前"
+    return f"{secs / 86400:.0f} 天前"
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -18,6 +32,56 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     def line(label: str, value: str) -> None:
         print(f"  {pad(label, 12)} {value}")
+
+    def info_block() -> None:
+        """订阅 / 节点 / 日志：都是「看一眼」的信息，排在出口和连通性前面。"""
+        rows = provider_overview()
+        for i, p in enumerate(rows):
+            bits = []
+            if p["nodes"]:
+                bits.append(f"{p['nodes']} 个节点"
+                            + (f"（可用 {p['alive']}）" if p["alive"] is not None else ""))
+            elif p["cache"]:
+                bits.append(dim("节点数未知（内核没在跑）"))
+            if p["groups"]:
+                bits.append("挂 " + "、".join(p["groups"]))
+            else:
+                bits.append(dim("没有组在用"))
+            if p["cache"]:
+                bits.append(f"缓存 {size_str(p['cache'])}（{_ago(p['age'])}）")
+            else:
+                bits.append(bad("未缓存"))
+            line("订阅" if i == 0 else "", f"{p['name']}  " + dim("   ").join(bits))
+
+        if rows:
+            total = sum(p["nodes"] or 0 for p in rows)
+            alive = sum(p["alive"] or 0 for p in rows)
+            untested = sum(p["untested"] or 0 for p in rows)
+            fastest = min((p["fastest"] for p in rows if p["fastest"]), default=None)
+            if total:
+                v = f"{total} 个"
+                v += f"  ·  可用 {alive}" if alive else "  ·  " + warn("一个都没测通")
+                if fastest:
+                    v += f"  ·  最快 {fastest[1]} {fastest[0]}ms"
+                if untested:
+                    v += dim(f"  ·  {untested} 个没测到")
+            else:
+                v = dim("读不到（内核没在跑？）")
+            line("节点", v)
+
+        level = read_config("log-level") or "（没写）"
+        path, where = find_log_file()
+        if path and path.exists():
+            line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
+        elif not IS_MACOS:
+            # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件
+            usage = re.search(r"take up ([\d.]+ ?[KMGTP]?B?)",
+                              run("journalctl", "--disk-usage").stdout)
+            line("日志", dim("journald（自动轮转）")
+                 + (f"  整机 {usage.group(1)}" if usage else "")
+                 + f"  级别 {level}" + dim("  journalctl -u mihomo"))
+        else:
+            line("日志", warn(f"{where}  级别 {level}"))
 
     # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样
     services: list[dict] = []
@@ -59,6 +123,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     if not IS_MACOS:
         line("系统代理", dim("macOS 专用（networksetup），本机不适用"))
+        info_block()
         if node := current_node():
             chain, delay = node
             lat = f"{delay}ms" if delay else dim("无延迟数据")
@@ -90,6 +155,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         others = [n for n in opened if n != service]
         if others:
             line("其它网卡", warn("还开着代理：" + "、".join(others) + "（mihomo-cli stop 可关）"))
+
+    info_block()
 
     if node := current_node():
         chain, delay = node
