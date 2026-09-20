@@ -44,5 +44,10 @@ proxy/ProxyGFWlist.list               节点选择
 proxy/ProxyLite.list                  节点选择
 
 # ── 最终兜底：必须最后 ──
+# 注：GEOIP 这条留着（讨论过，决定留）。理由：CN IP 的兜底直连——将来把
+#     「漏网之鱼」改成走代理时，不在 ChinaIp/ChinaIpV6 列表里的 CN IP 仍然直连。
+#     代价：配置目录需要有 geoip.metadb（8.1MB）。缺了 mihomo 会自己去 GitHub 下，
+#     下不到才是整份配置加载失败。实测删掉它不改变今天的落点（漏网之鱼当前也是
+#     DIRECT，两条路径同目标），差别只在“漏网之鱼改走代理”那天才出现。
 []GEOIP,CN,全球直连
 []MATCH,漏网之鱼
