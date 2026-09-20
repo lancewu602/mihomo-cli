@@ -1,0 +1,318 @@
+"""内核这一层：观测（进程 / 端口 / 控制接口 / 出口延迟）+ 服务管理。
+
+观测：内核在不在跑、监听哪个端口、当前出口是哪条链路。
+服务：让 brew services（macOS）或 systemd（Linux）把它拉起来、停下来、重启。
+
+系统代理是另一个模块的事（systemproxy.py）：那边 start/stop 时会调这里，
+这里只在 cmd_restart 里回头看一眼系统代理开没开，所以那个 import 放在函数里，
+免得两个模块在模块级互相 import 转不出来。
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from core import (HOST, IS_MACOS, PROBE_TIMEOUT, RESTART_HINT, SERVICE_HINT, TEST_URL,
+                  api, bad, can_check_listener, die, dim, listener, ok, proxy_port,
+                  run, warn)
+
+
+# ─────────────────────────── 内核状态查询 ───────────────────────────
+
+
+def mihomo_pid() -> str | None:
+    """内核进程的 PID。
+
+    macOS 用 pgrep；Linux 上 pgrep（procps）在最小化安装里可能没有，
+    就到 /proc 里直接找——纯标准库，不依赖任何外部命令。
+    """
+    if shutil.which("pgrep"):
+        p = run("pgrep", "-x", "mihomo")
+        if p.returncode == 0 and p.stdout.split():
+            return p.stdout.split()[0]
+    if Path("/proc").is_dir():                       # Linux 回退
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                if (d / "comm").read_text(errors="replace").strip() == "mihomo":
+                    return d.name
+            except OSError:
+                continue
+    return None
+
+
+GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
+
+
+def node_delay(name: str) -> int | None:
+    """某个节点的最近一次测速延迟（毫秒）；没有历史数据返回 None。"""
+    detail = api(f"/proxies/{urllib.parse.quote(name, safe='')}")
+    hist = (detail or {}).get("history") or []
+    return hist[-1].get("delay") if hist else None
+
+
+def current_node() -> tuple[list[str], int | None] | None:
+    """从入口组一路穿透嵌套组，返回 (链路, 叶子节点延迟)。
+
+    例：节点选择 → 自动选择 → 香港 中继-1 优化(3x)。
+    只看入口组的 now 只会得到中间组名，看不出实际出口在哪个节点。
+    """
+    data = api("/proxies")
+    if not data:
+        return None
+    proxies = data.get("proxies", {})
+
+    for start in ("节点选择", "GLOBAL"):
+        if start not in proxies or not proxies[start].get("now"):
+            continue
+        chain, seen, cur = [start], {start}, start
+        while len(chain) <= 6:      # 兜住配置写错导致的环
+            nxt = (proxies.get(cur) or {}).get("now")
+            if not nxt or nxt in seen:
+                break
+            chain.append(nxt)
+            seen.add(nxt)
+            cur = nxt
+        if len(chain) < 2:
+            continue
+
+        # 延迟优先取叶子节点；叶子是 DIRECT/REJECT 这类没有测速历史的，就退一层问组
+        delay = node_delay(chain[-1])
+        if delay is None:
+            for name in reversed(chain[:-1]):
+                if (proxies.get(name) or {}).get("type") in GROUP_TYPES:
+                    delay = node_delay(name)
+                    if delay is not None:
+                        break
+        return chain, delay
+    return None
+
+
+def probe(port: int) -> tuple[bool, str]:
+    """真发一个请求走代理，确认链路是通的。返回 (通不通, 说明文字)。"""
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": f"http://{HOST}:{port}"})
+    )
+    t0 = time.time()
+    try:
+        with opener.open(TEST_URL, timeout=PROBE_TIMEOUT) as r:
+            code = r.status
+        return code == 204, f"{code} in {(time.time() - t0) * 1000:.0f}ms"
+    except Exception as e:  # noqa: BLE001 —— 探测失败的原因太多，一律降级成一行提示
+        return False, f"{type(e).__name__}: {e}"
+
+
+# ─────────────── 内核服务（brew services / systemd）───────────────
+#
+# 内核常驻、开机自启、崩了重拉、日志去哪找，这些是「服务管理器」的活：
+# macOS 上是 brew services（用户级 launchd），Linux 上是 systemd。
+# start/stop/restart 走这里，**不自己 fork 一个 mihomo**——真 fork 的话，
+# 进程不归任何东西管：重启机器就没了，崩了没人拉，日志还得自己接。
+
+SERVICE_NAME = "mihomo"
+
+
+def service_manager() -> tuple[str, str] | None:
+    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。
+
+    macOS 优先 brew；Linux 优先 systemd（Linuxbrew 装的机器上 systemd 也是
+    系统服务的正经入口）。
+    """
+    if IS_MACOS and shutil.which("brew"):
+        return "brew", "brew services"
+    if shutil.which("systemctl") and Path("/run/systemd/system").is_dir():
+        return "systemd", "systemd"
+    if shutil.which("brew"):
+        return "brew", "brew services"
+    return None
+
+
+def service_status() -> tuple[str, str]:
+    """内核服务的状态：返回 (状态, 谁管的)。
+
+    状态取 running / stopped / error / unknown / ""（最后那个 = 本机没有服务管理器）。
+    """
+    mgr = service_manager()
+    if mgr is None:
+        return "", ""
+    kind, label = mgr
+    if kind == "brew":
+        p = run("brew", "services", "list")
+        if p.returncode != 0:
+            return "unknown", label
+        for line in p.stdout.splitlines():
+            fields = line.split()
+            if fields and fields[0] == SERVICE_NAME:
+                state = fields[1] if len(fields) > 1 else "unknown"
+                if state in ("started", "scheduled"):
+                    return "running", label
+                if state in ("stopped", "none"):
+                    return "stopped", label
+                return state, label          # error 之类原样透出去，别吞
+        return "unknown", label
+    p = run("systemctl", "is-active", SERVICE_NAME)
+    state = p.stdout.strip() or "unknown"
+    if state == "active":
+        return "running", label
+    if state in ("inactive", "failed", "unknown"):
+        return "stopped", label
+    return state, label
+
+
+def service_ctl(action: str) -> tuple[bool, str]:
+    """对内核服务做 start / stop / restart。返回 (成功?, 一行说明或错误)。"""
+    mgr = service_manager()
+    if mgr is None:
+        return False, (f"本机没找到 brew 或 systemd，不知道谁该{action} mihomo。\n"
+                       f"  手工来：{SERVICE_HINT}")
+    kind, label = mgr
+    cmd = (("brew", "services", action, SERVICE_NAME) if kind == "brew"
+           else ("systemctl", action, SERVICE_NAME))
+    p = run(*cmd)
+    out = (p.stdout + p.stderr).strip()
+    if p.returncode != 0:
+        if kind == "systemd" and re.search(
+                r"permission|authentication|access denied|not permitted", out, re.I):
+            out += (f"\n  {label} 要 root：sudo systemctl {action} {SERVICE_NAME}"
+                    f"（或者 sudo mihomo-cli {action}）")
+        return False, out or f"{' '.join(cmd)} 失败（退出码 {p.returncode}）"
+    return True, out
+
+
+def wait_kernel(port: int, seconds: float = 20.0, old_pid: str | None = None) -> bool:
+    """等内核把端口监听起来（服务刚拉起时还要读 5MB 配置，几秒很正常）。
+
+    old_pid 是给 restart 用的：旧进程没死透时端口上照样是 mihomo，不等它退出
+    就会把「旧的」当成「已就绪」。
+    """
+    if not can_check_listener():
+        time.sleep(3)                    # 查不了就按经验等一会儿，后面 probe 会把关
+        return True
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if old_pid and mihomo_pid() == old_pid:
+            time.sleep(0.4)
+            continue
+        names = {n for n, _ in listener(port)}
+        if "mihomo" in names:
+            return True
+        if names:                        # 端口被别人占了，再等也没意义
+            return False
+        time.sleep(0.4)
+    return False
+
+
+def ensure_kernel_up(port: int, strict: bool | None = None) -> bool:
+    """确保内核在跑。返回 True 表示本来就在跑（根本没动它）。
+
+    这是全工具唯一会「启动内核」的地方：端口上什么都没有时，交给 brew services /
+    systemd 去拉，然后等端口就绪。
+
+    strict（默认在 macOS 上为真）：端口被别的进程占着、或压根查不了时直接失败——
+    macOS 上接下来就要把系统代理指过去，指错等于断网。Linux 上不设代理，
+    而服务管理器的 start 本身是幂等的，所以放宽：照起，起不来再看日志。
+    """
+    strict = IS_MACOS if strict is None else strict
+    found = listener(port)
+    if "mihomo" in {n for n, _ in found}:
+        return True
+    if found:
+        who = ", ".join(f"{n}(PID {p})" for n, p in found)
+        if strict:
+            die(f"{HOST}:{port} 被 {who} 占用，不是 mihomo。\n"
+                f"  拒绝继续——把系统代理指过去会直接断网。\n"
+                f"  检查 config.yaml 的 mixed-port，或换一个端口。")
+        print(warn(f"⚠ {HOST}:{port} 已被 {who} 占用，内核可能起不来"))
+    if not can_check_listener():
+        if strict:
+            die(f"本机缺 lsof 和 ss，无法确认 {HOST}:{port} 上是不是 mihomo。\n"
+                f"  装其中一个再试：apt install lsof（或 iproute2）")
+        print(dim("· 本机没有 lsof/ss，没法确认端口；直接让服务管理器确保内核在跑"))
+
+    mgr = service_manager()
+    if mgr is None:
+        die("内核没在跑，而本机又没找到 brew 或 systemd，不知道该让谁启动它。\n"
+            f"  手工起：{SERVICE_HINT}")
+    good, msg = service_ctl("start")
+    if not good:
+        die(f"启动内核服务失败：\n  {msg}")
+    if not can_check_listener():
+        return False
+    print(dim(f"· 内核没在跑，已交给 {mgr[1]} 拉起 {SERVICE_NAME}，等端口就绪…"))
+    if not wait_kernel(port):
+        log = "brew services info mihomo" if mgr[0] == "brew" else "journalctl -u mihomo -n 50"
+        die(f"服务起来了，但 {HOST}:{port} 一直没监听。\n"
+            f"  看日志：{log}\n"
+            f"  mihomo-cli status 能看内核/端口/节点状态")
+    return False
+
+
+def stop_kernel() -> bool:
+    """停内核服务。返回是否成功（「本来就没跑」也算成功）。"""
+    state, label = service_status()
+    pid = mihomo_pid()
+    if not label:
+        print(dim("  本机没找到 brew 或 systemd，内核请自行处理"))
+        return True
+    if state == "stopped":
+        print(dim(f"  内核服务本来就没在跑（{label}）"))
+        if pid:
+            # 服务没起但进程在：那是别人手工起的，不替人杀进程
+            print(warn(f"  但有个 mihomo 进程在跑（PID {pid}），不是服务起的，没动它；"
+                       f"要停就 kill {pid}"))
+        return True
+    good, msg = service_ctl("stop")
+    if not good:
+        print(warn(f"⚠ 停内核服务失败：\n  {msg}"))
+        return False
+    print(f"{ok('✓')} 内核服务已停止  {dim(f'（{label}）')}")
+    return True
+
+
+def cmd_restart(_: argparse.Namespace) -> int:
+    """重启内核服务：让磁盘上的配置立刻生效（rules apply / sub add 之后常用）。
+
+    只动内核，不动系统代理开关——代理指的端口没变，内核回来照样通。
+    """
+    mgr = service_manager()
+    if mgr is None:
+        die("本机没找到 brew 或 systemd，不知道该让谁重启内核。\n"
+            f"  手工来：{RESTART_HINT}")
+    port = proxy_port()
+    old = mihomo_pid()
+    state, label = service_status()
+    print(dim(f"内核服务  {label}（当前 {state or '未知'}）" + (f"，PID {old}" if old else "")))
+    good, msg = service_ctl("restart")
+    if not good:
+        die(f"重启内核服务失败：\n  {msg}")
+    if not wait_kernel(port, old_pid=old):
+        log = "brew services info mihomo" if mgr[0] == "brew" else "journalctl -u mihomo -n 50"
+        die(f"重启后 {HOST}:{port} 一直没监听。\n  看日志：{log}")
+    print(f"{ok('✓')} 内核已重启  {dim(f'（{HOST}:{port} 就绪，PID {mihomo_pid() or '?'}）')}")
+
+    if not IS_MACOS:
+        return 0
+    # 函数内 import：systemproxy 在模块级 import 本模块（start/stop 要 ensure_kernel_up），
+    # 这里反过来只能放到函数里，否则两个模块在 import 阶段互相等对方初始化。
+    from systemproxy import KINDS, get_proxy, list_services
+    # 系统代理的开关不受重启影响（端口没变），但重启就是为了让它立刻生效，
+    # 所以带者开着代理的网卡真发一个请求验证一下
+    opened = [s["name"] for s in list_services()
+              if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)]
+    if not opened:
+        print(dim("  系统代理没开着；要让流量走内核就 mihomo-cli start"))
+        return 0
+    good_probe, info = probe(port)
+    print(f"    连通性 {ok('✓ ' + info) if good_probe else bad('✗ ' + info)}"
+          + dim(f"  （{opened[0]}）"))
+    if not good_probe:
+        print(dim("    看节点：mihomo-cli status / mihomo-cli sub nodes"))
+    return 0
+
+
