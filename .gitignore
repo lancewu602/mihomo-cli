@@ -6,3 +6,9 @@ venv/
 
 # macOS
 .DS_Store
+
+# rules/ 里 ACL4SSR 的镜像片段：从上游可重新拉取，不入库
+# （ACL4SSR 是 GPL 项目，镜像进来会把许可一起带进来）
+# 自己的 Custom.list 和 order.txt 要跟踪，所以下面单独放行
+rules/*/*.list
+!rules/*/Custom.list

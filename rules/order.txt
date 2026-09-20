@@ -1,0 +1,44 @@
+# rules/order.txt —— 片段拼接顺序（**行序就是优先级**）
+#
+# mihomo 从上到下匹配，先到先得：同一域名被多个片段命中时排上面的赢，
+# 同一片段内则先出现的赢。目录名只决定策略（proxy→节点选择 / direct→全球直连 /
+# reject→全球拦截），不决定优先级。
+#
+# 当前排法：局域网直连 > reject > direct > proxy
+#   LocalAreaNetwork 必须第 1，否则 .local 这类 mDNS 保留域会被广告规则抢走。
+#
+# 格式：# 开头的整行是注释，行尾也可写注释；[] 开头是内联规则（自带策略）；
+#      其余为「片段路径 策略」两列，策略省略时按所在目录推。
+
+# ── 局域网：必须最先 ──
+direct/LocalAreaNetwork.list          全球直连
+
+# ── 拦截 ──
+reject/BanAD.list                     全球拦截
+reject/BanProgramAD.list              全球拦截
+reject/BanEasyList.list               全球拦截
+reject/BanEasyListChina.list          全球拦截
+reject/BanEasyPrivacy.list            全球拦截
+reject/Custom.list                    全球拦截
+
+# ── 直连 ──
+direct/GoogleFCM.list                 全球直连
+direct/GoogleCN.list                  全球直连
+direct/Apple.list                     全球直连
+direct/ChinaMedia.list                全球直连
+direct/ChinaIp.list                   全球直连
+direct/ChinaIpV6.list                 全球直连
+direct/Custom.list                    全球直连
+direct/ChinaDomain.list               全球直连
+direct/ChinaCompanyIp.list            全球直连
+
+# ── 代理 ──
+proxy/Telegram.list                   节点选择
+proxy/ProxyMedia.list                 节点选择
+proxy/Custom.list                     节点选择
+proxy/ProxyGFWlist.list               节点选择
+proxy/ProxyLite.list                  节点选择
+
+# ── 最终兜底：必须最后 ──
+[]GEOIP,CN,全球直连
+[]MATCH,漏网之鱼

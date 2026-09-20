@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-mihomo-cli —— 开关 macOS 系统代理（按网卡指定），指向本机 mihomo 的 mixed-port。
+mihomo-cli —— 管 macOS 系统代理，以及把 rules/ 目录应用到 mihomo 配置。
 
     mihomo-cli nics               列出所有网卡（start/stop 的参数就是它）
     mihomo-cli start  [网卡名]     开系统代理；不传则用当前活跃网卡（没有就失败）
     mihomo-cli stop   [网卡名]     关系统代理；不传则关掉之前 start 过的
     mihomo-cli status [网卡名]     看状态（不带任何参数时的默认动作）
 
+    mihomo-cli rules order        片段顺序、各段规则数、多少条会被前面的片段吃掉
+    mihomo-cli rules diff         对比 rules/ 树与现网 config.yaml（只读，不写文件）
+    mihomo-cli rules apply        写 config.yaml：备份 → 写 → mihomo -t 校验 → 失败回滚
+                                  加 --reload 让运行中的内核立即生效
+
 网卡名带空格要加引号：mihomo-cli start "USB 10/100 LAN"
 
 零第三方依赖，只用标准库。内核本身由 brew services 常驻，
-本脚本只管「系统代理」开关，不启停 mihomo 进程。
+本脚本只管「系统代理」开关和规则生成，不启停 mihomo 进程。
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -433,7 +439,7 @@ def current_node() -> tuple[list[str], int | None] | None:
     """从入口组一路穿透嵌套组，返回 (链路, 叶子节点延迟)。
 
     例：节点选择 → 自动选择 → 香港 中继-1 优化(3x)。
-    只看入口组的 now 只会得到「自动选择」这个名字，看不出实际出口在哪个节点。
+    只看入口组的 now 只会得到中间组名，看不出实际出口在哪个节点。
     """
     data = api("/proxies")
     if not data:
@@ -692,10 +698,450 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────── rules 子命令 ───────────────────────
+# 把 rules/ 目录下的片段拼成 mihomo 的 rules: 区块。
+#
+# 片段本身不带策略（ACL4SSR 的约定，好让同一份规则能被不同策略复用），
+# 策略由它所在的目录决定，顺序由 order.txt 决定。
+
+RULES_DIR = Path(__file__).resolve().parent / "rules"
+ORDER_FILE = RULES_DIR / "order.txt"
+
+# 目录名 → 策略。目录名就是"这批规则要往哪走"。
+# 注意这些名字必须能在 config.yaml 里找到（组名或内建策略），mihomo 会校验。
+POLICY_BY_DIR = {"proxy": "节点选择", "direct": "全球直连", "reject": "全球拦截"}
+
+# 片段里出现在 payload 之后的字段是**参数**而不是策略，
+# 拼策略时必须插在它们前面：IP-CIDR,1.2.3.0/24,no-resolve → ...,DIRECT,no-resolve
+RULE_PARAMS = {"no-resolve", "src", "dport"}
+
+# mihomo 1.19 实测支持的类型。不在表里的会被跳过并告警——
+# 比如 URL-REGEX 是 Clash Premium 的，mihomo 会报 unsupported rule type，
+# 后果是**整份配置加载失败**，不是"这一条失效"。
+SUPPORTED_RULE_TYPES = {
+    "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-REGEX",
+    "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "SRC-IP-CIDR",
+    "GEOIP", "GEOSITE", "PROCESS-NAME", "PROCESS-PATH",
+    "DST-PORT", "SRC-PORT", "NETWORK", "RULE-SET", "MATCH", "FINAL",
+}
+
+# ACL4SSR_Online_Full_AdblockPlus.ini 的规则集顺序，映射到本目录的片段。
+#
+# 顺序不是小事：先到先得，而 proxy/ 里有 DOMAIN-KEYWORD,google。
+# 一旦把 proxy 放在 direct 前面，GoogleCN（29 条里 23 条）和
+# GoogleFCM（44 条里 18 条）会被这个关键字全部吃掉——不报错，只是静默走错。
+# [] 开头的是内联规则，语法拄 ACL4SSR 的 []GEOIP,CN。
+CANONICAL_ORDER: list[tuple[str, str | None]] = [
+    ("direct/LocalAreaNetwork.list", "全球直连"),
+    ("reject/BanAD.list", "全球拦截"),
+    ("reject/BanProgramAD.list", "全球拦截"),
+    ("reject/BanEasyList.list", "全球拦截"),
+    ("reject/BanEasyListChina.list", "全球拦截"),
+    ("reject/BanEasyPrivacy.list", "全球拦截"),
+    ("direct/GoogleFCM.list", "全球直连"),
+    ("direct/GoogleCN.list", "全球直连"),
+    ("direct/Apple.list", "全球直连"),
+    ("proxy/Telegram.list", "节点选择"),
+    ("direct/ChinaMedia.list", "全球直连"),
+    ("proxy/ProxyMedia.list", "节点选择"),
+    ("direct/ChinaIp.list", "全球直连"),
+    ("direct/ChinaIpV6.list", "全球直连"),
+    ("proxy/Custom.list", "节点选择"),
+    ("proxy/ProxyGFWlist.list", "节点选择"),
+    ("proxy/ProxyLite.list", "节点选择"),
+    ("direct/Custom.list", "全球直连"),
+    ("reject/Custom.list", "全球拦截"),
+    ("direct/ChinaDomain.list", "全球直连"),
+    ("direct/ChinaCompanyIp.list", "全球直连"),
+    ("[]GEOIP,CN,全球直连", None),
+    ("[]MATCH,漏网之鱼", None),
+]
+
+
+def config_path() -> Path:
+    return MIHOMO_DIR / "config.yaml"
+
+
+def fragment_rules(path: Path) -> list[str]:
+    """读一个片段里的规则行，跳过注释与空行。"""
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def read_order() -> tuple[list[tuple[str, str | None]], str]:
+    """读出片段顺序：返回 ([(片段, 策略)], 来源说明)。
+
+    优先用 rules/order.txt；没有就用内置的 ACL4SSR 规范顺序。
+    调用方会把"用的是哪一份"告诉用户，不静默。
+    """
+    if not ORDER_FILE.exists():
+        return CANONICAL_ORDER, f"内置的 ACL4SSR 规范顺序（{ORDER_FILE.name} 不存在）"
+
+    entries: list[tuple[str, str | None]] = []
+    for line in ORDER_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[]"):                 # 内联规则，自带策略
+            entries.append((line, None))
+            continue
+        bits = line.split()
+        entries.append((bits[0], bits[1] if len(bits) > 1 else None))
+    return entries, str(ORDER_FILE)
+
+
+def with_policy(line: str, policy: str | None) -> str:
+    """给片段里的规则补上策略。
+
+    片段格式是 TYPE,payload[,参数…]，所以策略插在 payload 之后、参数之前。
+    如果这条本来就自带策略（自定义片段里可能这么写），就尊重它自己的。
+    """
+    f = [x.strip() for x in line.split(",")]
+    if f[0].upper() in ("MATCH", "FINAL"):        # 没有 payload
+        return ",".join(f[:1] + ([policy] if policy else []) + f[1:])
+    payload, rest = f[1] if len(f) > 1 else "", f[2:]
+    if rest and rest[0] not in RULE_PARAMS:
+        return ",".join(f)
+    return ",".join([f[0], payload] + ([policy] if policy else []) + rest)
+
+
+def build_rules(prune: bool = False) -> tuple[list[str], list[dict], str, dict]:
+    """按顺序拼出完整的规则行。返回 (规则, 问题, 顺序来源, 统计)。
+
+    去重是默认行为：同一个 (类型,值) 只保留**第一次**出现的那条。
+    这不算是“删东西”——先到先得，后面那些重复本来就不生效，
+    只是占内存、让日志和 diff 变浑。
+
+    prune=True 时额外剔除被前面更宽规则遮蔽的条目（同样行为等价，
+    依据是被剔除的规则能匹配的每一个域名都已被更早的规则拿走了）。
+    """
+    order, origin = read_order()
+    kept, stats, problems = walk_order(order, prune)
+
+    rules = [line if entry.startswith("[]") else with_policy(line, policy)
+             for entry, policy, line in kept]
+    total = {"n": sum(s["n"] for s in stats.values()),
+             "dup": sum(s["dup"] for s in stats.values()),
+             "shadow": sum(s["shadow"] for s in stats.values())}
+    return rules, problems, origin, {"raw": total["n"], "duplicates": total["dup"],
+                                     "shadowed": total["shadow"], "stats": stats}
+
+
+def split_config(text: str) -> tuple[str, list[str], str]:
+    """把 config.yaml 拆成 (rules: 之前, 现有规则, rules: 之后)。"""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, l in enumerate(lines) if l.startswith("rules:")), None)
+    if start is None:
+        die(f"{config_path()} 里找不到 rules: 区块")
+    end = start + 1
+    while end < len(lines) and (lines[end].startswith("- ") or not lines[end].strip()):
+        end += 1
+    head, tail = "".join(lines[:start + 1]), "".join(lines[end:])
+    cur = [l[2:].strip() for l in lines[start + 1:end] if l.startswith("- ")]
+    return head, cur, tail
+
+
+def rule_key(line: str) -> tuple[str, str]:
+    p = line.split(",")
+    return (p[0].upper(), p[1].casefold() if len(p) > 1 else "")
+
+
+def backup_config() -> Path:
+    cfg = config_path()
+    bak = cfg.with_name(f"{cfg.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+    shutil.copy2(cfg, bak)
+    return bak
+
+
+def validate_config() -> tuple[bool, str]:
+    """跑 mihomo -t。返回 (是否通过, 最后一行输出)。"""
+    p = run("mihomo", "-t", "-d", str(MIHOMO_DIR))
+    out = (p.stdout + p.stderr).strip()
+    last = out.splitlines()[-1] if out else "（无输出）"
+    return p.returncode == 0 and "test is successful" in out, last
+
+
+def reload_config() -> bool:
+    """让运行中的 mihomo 重新读配置。"""
+    controller = read_config("external-controller") or f"{HOST}:9090"
+    body = json.dumps({"path": str(config_path())}).encode()
+    req = urllib.request.Request(f"http://{controller}/configs?force=true",
+                                 data=body, method="PUT")
+    if secret := read_config("secret"):
+        req.add_header("Authorization", f"Bearer {secret}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return 200 <= r.status < 300
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def report_problems(problems: list[dict]) -> None:
+    for p in problems:
+        if p["kind"] == "missing":
+            print(warn(f"  ⚠ 顺序表里列了、但文件不存在，已跳过：{p['entry']}"))
+        elif p["kind"] == "unlisted":
+            print(warn(f"  ⚠ 文件存在、但不在顺序表里，会被忽略：{p['entry']}"))
+        elif p["kind"] == "no_policy":
+            print(warn(f"  ⚠ 目录名推不出策略，已跳过：{p['entry']}"))
+        elif p["kind"] == "unsupported":
+            print(warn(f"  ⚠ 类型不被 mihomo 支持，已跳过：{p['entry']} → {p['rule']}"))
+
+
+def cmd_rules(args: argparse.Namespace) -> int:
+    action = getattr(args, "rules_action", None) or "diff"   # 不带则默认 diff，只读
+    if not hasattr(args, "prune"):
+        args.prune = False          # 没走子解析器时没有这个属性
+    return {"order": cmd_rules_order, "diff": cmd_rules_diff,
+            "apply": cmd_rules_apply}[action](args)
+
+
+def shadow_reason(t: str, v: str, seen_kw: set[str], seen_sfx: set[str]) -> str | None:
+    """这条规则会不会被前面某条更宽的规则吃掉？返回原因，否则 None。
+
+    每条判据都必须保证“更早那条能匹配本条能匹配的一切”——否则就会把活规则
+    误判成死规则删掉。实跈踩过的坑：按“键”而不是按“出现”删，
+    把 recaptcha.net 的首个出现（GoogleCN→DIRECT）也删了，域名直接掉到 MATCH。
+
+    只比域名空间；IP 网段相交判定贵得多，不在这里算（宁漏不错）。
+    """
+    if not v:
+        return None
+    parents = {".".join(v.split(".")[k:]) for k in range(len(v.split(".")))}
+    if t == "DOMAIN":
+        # 同值的 DOMAIN-SUFFIX 也能拿它，所以要带上 v 自己
+        if hit := parents & seen_sfx:
+            return f"被 DOMAIN-SUFFIX,{sorted(hit)[0]} 覆盖"
+    elif t == "DOMAIN-SUFFIX":
+        if hit := (parents - {v}) & seen_sfx:          # 排除自己那一层
+            return f"被 DOMAIN-SUFFIX,{sorted(hit)[0]} 覆盖"
+    elif t != "DOMAIN-KEYWORD":
+        return None
+    if t in ("DOMAIN", "DOMAIN-SUFFIX"):
+        if k := next((k for k in seen_kw if k in v), None):
+            return f"被 DOMAIN-KEYWORD,{k} 覆盖"
+    else:                                              # DOMAIN-KEYWORD
+        if k := next((k for k in seen_kw if k != v and k in v), None):
+            return f"被 DOMAIN-KEYWORD,{k} 覆盖"
+    return None
+
+
+def walk_order(order: list[tuple[str, str | None]], prune: bool
+               ) -> tuple[list[tuple[str, str | None, str]], dict[str, dict], list[dict]]:
+    """按顺序扫一遍，算出哪些规则真正生效。
+
+    一条规则不生效只有两种可能：
+      1. 同一个 (类型,值) 在前面已经出现过——先到先得，后面那条永远不会被看到；
+      2. 被前面某条更宽的规则遮蔽（见 shadow_reason）。
+
+    关键：判断和删除都是**按出现**，不是按键；而且只有真正留下来的规则
+    才能当“遮蔽源”（被删掉的规则不再遮蔽后面的）。
+
+    返回 ([(片段, 策略, 规则行)], 每片段统计, 问题列表)。
+    """
+    seen_exact: set[tuple[str, str]] = set()
+    seen_kw: set[str] = set()
+    seen_sfx: set[str] = set()
+    kept: list[tuple[str, str | None, str]] = []
+    stats: dict[str, dict] = {}
+    problems: list[dict] = []
+
+    for entry, explicit in order:
+        if entry.startswith("[]"):                     # 内联规则，自带策略
+            kept.append((entry, None, entry[2:].strip()))
+            continue
+
+        frag = RULES_DIR / entry
+        if not frag.exists():
+            problems.append({"kind": "missing", "entry": entry})
+            stats[entry] = {"n": 0, "dup": 0, "shadow": 0, "examples": []}
+            continue
+        policy = explicit or POLICY_BY_DIR.get(entry.split("/")[0])
+        if policy is None:
+            problems.append({"kind": "no_policy", "entry": entry})
+            stats[entry] = {"n": 0, "dup": 0, "shadow": 0, "examples": []}
+            continue
+
+        st = {"n": 0, "dup": 0, "shadow": 0, "examples": []}
+        for line in fragment_rules(frag):
+            f = [x.strip() for x in line.split(",")]
+            t = f[0].upper()
+            if t not in SUPPORTED_RULE_TYPES:
+                problems.append({"kind": "unsupported", "entry": entry, "rule": line})
+                continue
+            st["n"] += 1
+            v = f[1].lower() if len(f) > 1 else ""
+            if (t, v) in seen_exact:                   # 同键的后续出现
+                st["dup"] += 1
+                continue
+            if why := shadow_reason(t, v, seen_kw, seen_sfx):
+                st["shadow"] += 1
+                if len(st["examples"]) < 2:
+                    st["examples"].append((line, why))
+                if prune:                              # 只有剪枝模式才真的丢
+                    continue
+            kept.append((entry, policy, line))
+            seen_exact.add((t, v))                     # 留下来的才能当遮蔽源
+            if t == "DOMAIN-KEYWORD":
+                seen_kw.add(v)
+            elif t == "DOMAIN-SUFFIX":
+                seen_sfx.add(v)
+        stats[entry] = st
+
+    # 磁盘上有、但顺序表里没列的片段会被静默忽略——这是个坑，必须提醒
+    listed = {e for e, _ in order if not e.startswith("[]")}
+    for f in sorted(RULES_DIR.rglob("*.list")):
+        rel = str(f.relative_to(RULES_DIR))
+        if rel not in listed:
+            problems.append({"kind": "unlisted", "entry": rel})
+    return kept, stats, problems
+
+
+def cmd_rules_order(_: argparse.Namespace) -> int:
+    order, origin = read_order()
+    _, stats, problems = walk_order(order, prune=False)
+    print(dim(f"片段顺序（{origin}）"))
+    print()
+    print(f"  {'#':>3}  {pad('片段', 34)}{'规则数':>8}{'同键重复':>9}{'被遮蔽':>8}  目标")
+    total = t_dup = t_shadow = 0
+    for i, (entry, policy) in enumerate(order, 1):
+        if entry.startswith("[]"):
+            print(f"  {i:>3}  {pad(dim('（内联规则）'), 34)}{'':>8}{'':>9}{'':>8}  {entry[2:]}")
+            continue
+        st = stats.get(entry, {"n": 0, "dup": 0, "shadow": 0, "examples": []})
+        total += st["n"]
+        t_dup += st["dup"]
+        t_shadow += st["shadow"]
+        pol = policy or POLICY_BY_DIR.get(entry.split("/")[0]) or warn("?")
+        mark = "" if (RULES_DIR / entry).exists() else bad("  ← 缺失")
+        dup = dim(f"{st['dup']:>9}") if st["dup"] else dim(f"{'-':>9}")
+        sh = warn(f"{st['shadow']:>8}") if st["shadow"] else dim(f"{'-':>8}")
+        print(f"  {i:>3}  {pad(entry, 34)}{st['n']:>8}{dup}{sh}  {pol}{mark}")
+    print()
+    print(f"  合计 {total} 条：{t_dup} 条同键重复、{t_shadow} 条被更宽的规则遮蔽")
+    print(dim("  后两类先到先得，都不会生效；apply 默认去重，加 --prune 连遮蔽的一起去掉"))
+    if problems:
+        print()
+        report_problems(problems)
+    ex = [(e, st["examples"]) for e, st in stats.items() if st["examples"]]
+    if ex:
+        print()
+        print(dim("  遮蔽样例："))
+        for entry, examples in ex[:5]:
+            for line, why in examples:
+                print(f"    {entry}  {bad(line)} {dim('→ ' + why)}")
+    return 0
+
+
+def cmd_rules_diff(args: argparse.Namespace) -> int:
+    rules, problems, origin, dedup = build_rules(prune=args.prune)
+    n_inline = sum(1 for e, _ in read_order()[0] if e.startswith("[]"))
+    head, cur, tail = split_config(config_path().read_text(encoding="utf-8"))
+
+    # 注意：同一个 (类型,值) 可能出现在多个片段里。mihomo 先到先得，
+    # 所以映射必须保留**第一次**出现的那条，用 setdefault 而不是字典推导（后者留最后一条）。
+    cur_map: dict[tuple[str, str], str] = {}
+    for l in cur:
+        cur_map.setdefault(rule_key(l), l)
+    new_map: dict[tuple[str, str], str] = {}
+    for l in rules:
+        new_map.setdefault(rule_key(l), l)
+    added = [l for l in rules if rule_key(l) not in cur_map]
+    removed = [l for l in cur if rule_key(l) not in new_map]
+    changed = [k for k in cur_map.keys() & new_map.keys() if cur_map[k] != new_map[k]]
+
+    print(dim(f"规则来源：{RULES_DIR}"))
+    print(dim(f"片段顺序：{origin}"))
+    print()
+    print(f"  片段合计                      {dedup['raw']:>7} 条")
+    if args.prune:
+        print(f"  去重 + 剔除被遮蔽（--prune） {dim('-' + str(dedup['duplicates'] + dedup['shadowed'])):>8}")
+    else:
+        print(f"  去重（同类型+值只留第一条）   {dim('-' + str(dedup['duplicates'])):>8}")
+        if dedup["shadowed"]:
+            print(dim(f"  （另有 {dedup['shadowed']} 条被更宽的规则遮蔽，加 --prune 一并去掉）"))
+    print(f"  应用后                        {len(rules):>7} 条" + dim(f"（含 {n_inline} 条内联规则）"))
+    print()
+    print(f"  现网 {config_path().name}              {len(cur):>7} 条")
+    print()
+    print(f"  {ok('新增')} {len(added):>7} 条")
+    print(f"  {bad('删除')} {len(removed):>7} 条" + (dim("   ← 现网有、rules/ 树里没有") if removed else ""))
+    print(f"  {warn('改策略')} {len(changed):>5} 条" + (dim("   ← 同域名不同目标，先出现的赢") if changed else ""))
+
+    if removed:
+        print()
+        print(dim("  会被删掉的（前 10 条）："))
+        for l in removed[:10]:
+            print(f"    {bad('-')} {l}")
+        if len(removed) > 10:
+            print(dim(f"    …还有 {len(removed) - 10} 条"))
+    if changed:
+        print()
+        print(dim("  改了策略的（前 10 条）："))
+        for k in changed[:10]:
+            print(f"    {warn('~')} {cur_map[k]}")
+            print(f"      {dim('→')} {new_map[k]}")
+    if problems:
+        print()
+        report_problems(problems)
+
+    print()
+    print(dim("这只是对比，没有写入任何文件。要落地就跑 mihomo-cli rules apply"))
+    return 0
+
+
+def cmd_rules_apply(args: argparse.Namespace) -> int:
+    rules, problems, origin, dedup = build_rules(prune=args.prune)
+    if not rules:
+        die("拼出来 0 条规则，拒绝写入（检查 rules/order.txt 和片段是否为空）")
+
+    cfg = config_path()
+    text = cfg.read_text(encoding="utf-8")
+    head, cur, tail = split_config(text)
+    if problems:
+        report_problems(problems)
+        print()
+
+    bak = backup_config()
+    print(f"{ok('✓')} 已备份 {dim(bak.name)}")
+
+    cfg.write_text(head + "".join(f"- {r}\n" for r in rules) + tail,
+                   encoding="utf-8", newline="\n")
+    note = f"（片段 {dedup['raw']} 条"
+    if args.prune:
+        note += f"，去重+剔除被遮蔽 {dedup['duplicates'] + dedup['shadowed']} 条"
+    else:
+        note += f"，去重 {dedup['duplicates']} 条"
+    note += f"；原配置 {len(cur)} 条，{cfg.stat().st_size / 1024 / 1024:.2f} MB）"
+    print(f"{ok('✓')} 已写入 {len(rules)} 条规则" + dim(note))
+
+    good, last = validate_config()
+    if not good:
+        shutil.copy2(bak, cfg)                      # 回滚
+        print(bad(f"✗ mihomo -t 校验失败，已回滚到 {bak.name}"))
+        print(bad(f"  {last}"))
+        return 1
+    print(f"{ok('✓')} mihomo -t 校验通过  {dim(last)}")
+
+    if args.reload:
+        if reload_config():
+            print(f"{ok('✓')} 已热重载运行中的 mihomo  {dim('（通过 external-controller API）')}")
+        else:
+            print(warn("⚠ 热重载失败，配置文件已写入，可以 brew services restart mihomo"))
+    else:
+        print(dim("  没有热重载；加 --reload 让它立即生效（否则等下次重启 mihomo）"))
+    return 0
+
+
 # ─────────────────────────── 入口 ───────────────────────────
 
 SUBCOMMANDS = {
     "nics": ("列出所有网卡（含设备名和代理状态）", cmd_nics),
+    "rules": ("把 rules/ 目录下的规则应用到 config.yaml", cmd_rules),
     "start": ("开系统代理", cmd_start),
     "stop": ("关系统代理", cmd_stop),
     "status": ("查看当前状态（默认）", cmd_status),
@@ -703,25 +1149,37 @@ SUBCOMMANDS = {
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics"}
 
+# 这些子命令不收"网卡名"这个位置参数
+NO_SERVICE_ARG = {cmd_nics, cmd_rules}
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mihomo-cli",
-        description="开关 macOS 系统代理（按网卡指定），指向本机 mihomo",
+        description="开关 macOS 系统代理（按网卡指定），以及把 rules/ 目录应用到 mihomo 配置",
         epilog=(
             "网卡名用 `mihomo-cli nics` 查；不传网卡名时用当前活跃网卡（没有就直接失败），"
-            "stop 则关掉之前 start 过的"
+            "stop 则关掉之前 start 过的。规则用 `mihomo-cli rules diff` 先看再 apply。"
         ),
     )
     sub = parser.add_subparsers(dest="action")
     for name, (help_text, fn) in SUBCOMMANDS.items():
         aliases = sorted(a for a, target in ALIASES.items() if target == name)
         p = sub.add_parser(name, help=help_text, aliases=aliases)
-        if fn is not cmd_nics:
+        if fn not in NO_SERVICE_ARG:
             p.add_argument(
                 "service", nargs="?", default=None, metavar="网卡名",
                 help="网卡名；不传时 start 用当前活跃网卡（没有则报错），stop 关掉之前 start 过的",
             )
+        if fn is cmd_rules:
+            rsub = p.add_subparsers(dest="rules_action")
+            rd = rsub.add_parser("diff", help="只对比，不写任何文件（默认）")
+            ra = rsub.add_parser("apply", help="写入 config.yaml：先备份，再校验，失败自动回滚")
+            for sp in (rd, ra):
+                sp.add_argument("--prune", action="store_true",
+                                help="额外剔除被前面更宽规则遮蔽的条目（行为等价，只是让规则表变干净）")
+            ra.add_argument("--reload", action="store_true", help="写成功后热重载运行中的 mihomo")
+            rsub.add_parser("order", help="打印当前生效的片段顺序与各自的规则数")
 
     args = parser.parse_args(argv)
     if args.action is None:               # 不带参数 = status，只读，不碰系统设置
