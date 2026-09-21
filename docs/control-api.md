@@ -1,6 +1,8 @@
 # mihomo 控制接口（external-controller）
 
-内核只有一份静态 `config.yaml`，改它就得重启。`external-controller`（默认 `127.0.0.1:9090`）
+内核只有一份静态 `config.yaml`，改它就得重启。`external-controller`（约定俗成写 `127.0.0.1:9090`；
+注意内核**默认是空字符串，也就是不监听任何控制端口**，brew 装的默认 `config.yaml` 里也只有
+`mixed-port`——`sub set` 建骨架时会补上这行，见 [subscription.md](subscription.md)）
 让内核额外开一个 HTTP REST API——这是**不重启就操作运行中内核**的唯一通道。
 它跟跑流量的代理端口（`mixed-port`，默认 7890）是两件东西：一个是控制面，一个是数据面。
 
@@ -42,9 +44,9 @@
 | `src/mihomo_cli/status.py:129` | `GET /version` | 判断控制接口可用 |
 | `src/mihomo_cli/kernel.py:65` / `:87` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
 | `src/mihomo_cli/kernel.py:113` / `:103` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
-| `src/mihomo_cli/subs.py:510` / `:704` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+| `src/mihomo_cli/subs.py:697` / `:700` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
 
-写接口只用一个：`src/mihomo_cli/subs.py:550` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+写接口只用一个：`src/mihomo_cli/subs.py:732` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
 以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`。
 
 **不用 `PUT /configs?force=true` 热重载。** `sub set` 改完 config.yaml 走的是**重启内核服务**
@@ -58,12 +60,15 @@
   `urllib.parse.quote(name, safe='')` 之后再拼进路径。
 - **`PUT /proxies/{组}` 不改 config.yaml**：切节点是内核**运行时**状态（body 是 `{"name": "<节点名>"}`）。
   本工具的 `sub use <序号>` 就是打这个接口——它**不写配置文件**，靠的是 config 里
-  `profile.store-selected: true` 让内核把选择存进 `cache.db`，实测重启后仍然是那个节点
-  （不写这行的话一重启就回到组的第一个候选）。要“永久”换默认又不想依赖缓存，就得改
+  `profile.store-selected: true` 让内核把选择存进 `cache.db`，实测重启后仍然是那个节点。
+  （mihomo ≥ v1.18 的默认值本来就是 `true`，所以这行现在是显式声明而不是开关；
+  不想要持久化就改成 false 或删掉那一节。）要“永久”换默认又不想依赖缓存，就得改
   config.yaml 里组的顺序——那仍然是用控制面板/手工的事。
 - **`PUT /providers/proxies/{名}` 失败时回的是 `503`，不是 `404`**：`503` = 内核去拉了但没拉成
   （实测：`proxy-providers` 没写 `proxy: DIRECT` 时，这个请求走的是内部分流、进了隧道，
   隧道第一跳是个坏节点就 503）。
   `src/mihomo_cli/subs.py` 把这两种分开提示，再降级成「删缓存 + 重启内核」。
 - **`external-controller` 没配或端口错了**，症状是“进程在、端口在监听、但接口读不到”。
-  `status` 会把这两种情况分开显示（代理端口 vs 控制接口），别混着看。
+  `status` 会把这两种情况分开显示（代理端口 vs 控制接口），别混着看。前一种在默认安装上
+  是常态：内核默认不监听，`core.py` 那个 `127.0.0.1:9090` 兜底只在“内核真监听了这个端口”
+  时才有意义——`lsof -iTCP:9090 -sTCP:LISTEN` 空的话，所有控制接口命令都只剩降级路径。

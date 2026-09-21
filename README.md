@@ -48,10 +48,13 @@ sub set <链接>           设置订阅链接（**只支持一个**）：没设�
                          再补一份骨架（只在缺的时候补，你自己的组/规则/设置一律不碰）：
                          两个组 `节点选择`（select，默认选中自动组）+ `自动选择`（url-test）、
                          一条分流规则 `GEOSITE,cn,DIRECT` + 兜底 `MATCH,节点选择`、以及
-                         geodata 自动更新（`geo-auto-update` / `geo-update-interval` /
-                         `geox-url.geosite` 换 jsdelivr 镜像）；
+                         八个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
+                         `external-controller` / `unified-delay` / `tcp-concurrent` /
+                         geodata 自动更新两项，以及四项 `geox-url` 换 jsdelivr 镜像、
+                         `profile.store-selected`）；
                          链接变了就把旧的整块丢掉、新的全量接管，链接没变则一个字节都不改、
-                         只让内核重拉节点；设置前先自己拉一遍确认链接可用（--force 跳过）
+                         只让内核重拉节点（唯一的例外：老配置里缺的全局设置会补上——只补缺的，
+                         写一次就安静）；设置前先自己拉一遍确认链接可用（--force 跳过）
 sub update               更新节点信息：让内核当场重拉（链接不变，不碰配置文件）
 sub show                 看当前订阅：链接、缓存文件、挂在哪个组、内核那边多少节点（默认动作）
 sub nodes [--delay]      列当前订阅的节点：**序号** / 名字 / 类型 / 延迟；`●` 标出当前出口，
@@ -59,7 +62,8 @@ sub nodes [--delay]      列当前订阅的节点：**序号** / 名字 / 类型
 sub use <序号>           指定出口节点（序号就是 sub nodes 里那个，1 开始数）
 sub use --auto           回到自动选择（url-test 挑最快的）
                          两者都是**运行时**切换（打 PUT /proxies/节点选择），不写 config.yaml；
-                         能活过重启靠骨架里的 `profile: store-selected: true`
+                         能活过重启靠骨架里的 `profile: store-selected: true`（内核 ≥ v1.18 的
+                         默认值本来就是 true，这行是显式声明）
 
 reset [--hard]           清空配置：config.yaml 清成最小骨架（顶部注释 + mixed-port），顺带摘掉
                          系统代理、删掉订阅缓存；--hard 连工具备份一起删（放弃回滚）。
@@ -97,7 +101,9 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
   也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，唯一的写操作是 `sub set`：
   只动 `proxy-providers` 里的 `airport`、引用它的组，以及**缺失时才补**的那几条（分流规则、
-  兜底 MATCH、geodata 自动更新）；你已经写过的组、规则、设置一律不碰。
+  兜底 MATCH、那几项全局设置）；你已经写过的组、规则、设置一律不碰——全局设置里已有的
+  **顶层键**不动，`geox-url` / `profile` 这种嵌套节则是**缺哪个子键补哪个**（升级前只写了
+  `geox-url.geosite` 的配置，会在下次写配置时补上 `geoip` / `mmdb` / `asn`）。
 - 内核目录里的数据文件（`GeoSite.dat` 4.2 MB、`geoip.metadb` 8.1 MB 等）**由内核自己下载和维护**，
   工具不装也不删它们；`GeoSite.dat` 在写完规则跑 `mihomo -t` 校验时就会下下来。
 

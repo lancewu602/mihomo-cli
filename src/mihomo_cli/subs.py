@@ -78,19 +78,71 @@ GROUP_TOLERANCE = 50  # url-test 的切换容差（ms）：比当前最快的慢
 # 自己往 rules 里加就行：本工具只在「rules 为空或只有自己那条 MATCH」时才动手。
 SPLIT_RULES = [("GEOSITE,cn", "DIRECT")]
 
-# geodata 自动更新：数据文件缺失时本来就由内核自己下；这两行是让它以后按间隔检查新版。
-GEO_SCALARS = (("geo-auto-update", "true"), ("geo-update-interval", "24"))
-# 分流规则要用 GeoSite.dat，而它的**默认下载源是 github.com**。实测（2026-09，国内直连）：
-# github 那个地址 302 之后就超时，而校验配置时内核就会去初始化 geosite——也就是说没有
-# 镜像时连 `mihomo -t` 都过不了，`sub set` 会被自己的校验挡回来。换成 jsdelivr 镜像后
-# 实测 2.9 秒下完、`Finished initial GeoSite rule cn => DIRECT, records: 111021`。
-# 只覆盖这一项：geoip / mmdb / asn 的默认源本来就是 jsdelivr。
-GEOX_GEOSITE = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+# 建骨架时要补的全局标量（顶层键 + 值）。顺序就是写进配置里的顺序，大致跟手册 general 那页
+# 的排法对齐：运行模式 / 日志级别 / IPv6 / 控制接口 / 统一延迟 / TCP 并发 / geodata。
+#
+# 里面**只有两项是内核默认值做不到的**（`geox-url` 和 `external-controller`，各自下面写了
+# 原因），其余都是「内核默认值本来就对」或者「只差一个键」的口味项，照样写出来是因为这份
+# 骨架是给人读的：`sub set` 完 config.yaml 里能一眼看到本工具依赖哪几项，不用去翻手册。
+# 每一项都能自己改——已有的键一律不覆盖，删掉或改掉都行（嵌套节也只补缺的子键）。
+GLOBAL_SCALARS = (
+    # 内核默认就是 rule。显式写出来是因为这份骨架的分流（GEOSITE + 兜底 MATCH）只在
+    # rule 模式下成立：换成 global 或 direct，rules 整段失效。
+    ("mode", "rule"),
+    # 内核默认 info。写出来是为了 `mihomo-cli logs` 能显示级别——它读的就是这一行。
+    ("log-level", "info"),
+    # **内核默认 true，这里是关掉**。理由很现实：不少线路的 IPv6 是坏的或半坏的，AAAA
+    # 解析出来的地址连不上，表现为「节点明明是好的却偶发超时」。代价是同一条域名不再走
+    # 原生 IPv6——本机真要 IPv6 就把这行删掉/改成 true。
+    ("ipv6", "false"),
+    # **本工具最依赖的一行**：`status` / `sub nodes` / `sub use` / `sub update` 都走控制
+    # 接口，而内核默认**不监听**（brew 装的默认 config.yaml 里也只有 mixed-port）。没有
+    # 这行，上面几条命令就只剩「读不到」和降级路径。只绑 127.0.0.1、不写 secret。
+    ("external-controller", "127.0.0.1:9090"),
+    # 内核默认 false。开了才算 RTT、去掉握手耗时，url-test 的延迟才是同口径比较——骨架
+    # 默认选中的就是那个自动组（`节点选择` 的候选第一个），所以这项跟它对得上。
+    ("unified-delay", "true"),
+    # 内核默认 false。用 DNS 解析出的全部 IP 并发连、取先成功的，等于少一次「这个 IP 不通
+    # 就重试下一个」的等待。
+    ("tcp-concurrent", "true"),
+    # geodata 自动更新：数据文件缺失时本来就由内核自己下；这两行是让它以后按间隔检查新版
+    # （interval 24 也是内核默认值，写出来同样是自文档化）。
+    ("geo-auto-update", "true"),
+    ("geo-update-interval", "24"),
+)
+# 数据文件的下载源。**内核 DefaultRawConfig 里四项全是 github.com**（v1.19.31 实测：不写
+# geox-url 时内核去连 20.205.243.166:443 也就是 github，302 之后超时；同一时刻还有一条
+# 连 objects.githubusercontent.com 185.199.109.133:443 的 SYN_SENT 卡着）——手册 general 那页
+# `geox-url` 代码块里的 jsdelivr 地址是**示例值**，不是内核默认值。
+# 为什么必须在写配置前就换掉：分流规则要用 GeoSite.dat，而 `mihomo -t` 校验配置时内核就会
+# 去初始化 geosite——没镜像连校验都过不了，`sub set` 会被自己的校验挡回来（写完 → 校验
+# 失败 → 回滚）。换镜像后实测 2.9 秒下完、`Finished initial GeoSite rule cn => DIRECT,
+# records: 111021`。
+# 为什么四项一起换：`geo-auto-update` 打开后，内核按 geodata 的 enable 情况**并发**刷
+# GeoSite / MMDB / ASN（component/updater/update_geo.go 的 updateGeoDatabases），各走各的
+# geox-url——只换 geosite 的话，用户按文档建议加一条 `GEOIP,CN` 之后，24 小时的 tick 就
+# 去撞 github 了。实测四项镜像都能下：geosite 4.2 MB / geoip.metadb 8.5 MB /
+# ASN.mmdb 12 MB（`IP-ASN,15169` 规则实测触发下载，6 秒完）。
+GEOX_MIRROR = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release"
+# ASN 那个文件（GeoLite2-ASN.mmdb）MetaCubeX/meta-rules-dat 不发，用手册 geox-url 示例里
+# 那个源。
+GEOX_ASN = "https://testingcf.jsdelivr.net/gh/xishang0128/geoip@release/GeoLite2-ASN.mmdb"
 # 要补的嵌套块（顶层键 + 节里的行）。值写成最终文本：URL 要引号，布尔值不能引（引了就成了字符串）。
-GEO_BLOCKS = (
-    ("geox-url", (f'geosite: "{GEOX_GEOSITE}"',)),
-    # store-selected：把「API 对策略组的选择」存进 cache.db，**重启后仍然是这个选中**。
-    # `sub use` 切节点靠的就是它——不写这行的话切完一重启就回到自动选择。
+GLOBAL_BLOCKS = (
+    (
+        "geox-url",
+        (
+            f'geosite: "{GEOX_MIRROR}/geosite.dat"',
+            f'geoip: "{GEOX_MIRROR}/geoip.dat"',
+            # mmdb 用 geoip.metadb：内核默认那个 URL 指的就是这个文件，只换主机不换东西。
+            f'mmdb: "{GEOX_MIRROR}/geoip.metadb"',
+            f'asn: "{GEOX_ASN}"',
+        ),
+    ),
+    # store-selected：把「API 对策略组的选择」存进 cache.db，**重启后仍然是这个选中**，
+    # `sub use` 切节点靠的就是它。注意 mihomo ≥ v1.18 的默认值**本来就是 true**
+    # （DefaultRawConfig{Profile:{StoreSelected:true}}），所以这行现在的意义是自文档化：
+    # 说明这个行为是有意的，以及不想要时改哪儿（false / 删掉这一节）。
     ("profile", ("store-selected: true",)),
 )
 
@@ -563,35 +615,63 @@ def _rule_items(lines: list[str]) -> list[str]:
     ]
 
 
-def _ensure_globals(lines: list[str]) -> list[str]:
-    """补本工具要的全局设置，返回补了哪些（给用户看的）。**已有的一律不碰**。
+def _ensure_globals(lines: list[str]) -> tuple[list[str], bool]:
+    """补本工具要的全局设置。返回 (给用户看的说明, 有没有真的改过 lines)。
 
-    三件事：geodata 自动更新的两个标量、`geox-url.geosite`（默认源是 github.com，
-    在没法直连 github 的网络上会超时，而 geosite 又是 GEOSITE 规则必需的）、以及
-    `profile.store-selected`（让 `sub use` 切好的节点重启后仍然生效）。
+    说明那半边跟 _ensure_group/_ensure_rules 一个风格，每条自己带前缀；**已有的值一律不碰**。
 
-    任何一个**顶层键**已经存在就跳过它（用户的配置优先）——比如你自己写了 `profile:`，
-    里面放什么由你决定，我们不去翻你的节。
+    见 GLOBAL_SCALARS / GLOBAL_BLOCKS：运行模式、日志级别、IPv6、控制接口、统一延迟、
+    TCP 并发、geodata 自动更新、geox-url 四个下载源、profile.store-selected。其中只有
+    `geox-url`（默认源 github.com，连 `mihomo -t` 都会被卡住）和 `external-controller`
+    （内核默认不监听，本工具一半的命令靠它）是内核默认值做不到的；其余是默认值或口味项，
+    写出来是为了让这份配置自解释。
+
+    顶层键**不存在**就整节写出来；已经存在则**缺哪个子键补哪个**（都不覆盖）——这条是给
+    老版本写的配置留的路：之前 `geox-url` 只覆盖 `geosite`，要是按「整节存在就跳过」处理，
+    升级后那三项永远补不上。
+
+    第二个返回值是给「链接没变」那条路用的：它靠 "有没有改过 lines" 区分「只重拉节点」和
+    「真得写盘 + 重启」——不能拿说明列表非空当依据，流式写法那种提醒是不写盘的。
+    节是流式写法（`geox-url: {…}`）时整节跳过——按行改的活干不了，也不猜。
     """
     block: list[str] = []
     added: list[str] = []
-    for key, value in GEO_SCALARS:
+    hints: list[str] = []
+    merged = False
+    for key, value in GLOBAL_SCALARS:
         if _section_span(lines, key) is None:
             block.append(f"{key}: {value}\n")
             added.append(f"{key}: {value}")
-    for key, rows in GEO_BLOCKS:
-        if _section_span(lines, key) is None:
+    for key, rows in GLOBAL_BLOCKS:
+        span = _section_span(lines, key)
+        if span is None:
             block += [f"{key}:\n", *(f"  {row}\n" for row in rows)]
             added.append(f"{key}（{rows[0].split(':')[0]} 等）")
-    if not block:
-        return []
-    if (span := _section_span(lines, "mixed-port")) is not None:
-        lines[span[0] + 1 : span[0] + 1] = block  # 全局设置那一块
-    else:
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        lines.extend(block)
-    return added
+            continue
+        if _flow_head(lines, span[0]):
+            miss = "、".join(r.split(":", 1)[0] for r in rows)
+            hints.append(
+                warn(f"⚠ 全局      {key} 是流式写法（{{…}}），没动它；缺 {miss}，自己补一下")
+            )
+            continue
+        have = _block_keys(lines, span[0], span[1], 0)  # 顶层节，子键缩进 > 0
+        missing = [r for r in rows if r.split(":", 1)[0] not in have]
+        if not missing:
+            continue
+        at = _content_end(lines, span[0], span[1])  # 插在节里最后一个有内容的行后面
+        indent = _field_indent(lines, span[0], at, 2)
+        lines[at:at] = [f"{' ' * indent}{row}\n" for row in missing]
+        merged = True
+        added.append(f"{key}（补了 {'、'.join(r.split(':', 1)[0] for r in missing)}）")
+    notes = [dim(f"全局      补了 {'、'.join(added)}（已有的键一个字节不碰）")] if added else []
+    if block:
+        if (span := _section_span(lines, "mixed-port")) is not None:
+            lines[span[0] + 1 : span[0] + 1] = block  # 全局设置那一块
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.extend(block)
+    return [*notes, *hints], bool(block) or merged
 
 
 def _cache_path(keys: dict) -> Path:
@@ -669,7 +749,7 @@ def _refresh(prov: dict) -> int:
         why = "内核自己没拉成（订阅地址此刻不可达？）" if code == 503 else "内核里还没有这个订阅"
         print(warn(f"⚠ 控制接口返回 {code}：{why}"))
     else:
-        print(dim("  控制接口读不到（external-controller 没配？）"))
+        print(dim("  控制接口读不到（external-controller 没配 / 端口不对？或内核刚起还没监听）"))
 
     cache = _cache_path(prov["keys"])
     if _drop_cache(cache):
@@ -752,8 +832,20 @@ def cmd_sub_set(args: argparse.Namespace) -> int:
         )
 
     if old is not None and (old["keys"].get("url") or "") == url:
-        print(f"{ok('✓')} 链接没变，config.yaml 一个字节没改；只更新节点")
-        return _refresh(old)
+        # 链接没变：正常情况下一个字节都不改，只让内核重拉节点。**唯一的例外是缺的全局
+        # 设置**——0.1.x 建的骨架里没有 external-controller / ipv6 那几项，不补的话本工具
+        # 自己的 status / sub nodes / sub use 全是废的。只补缺的、绝不覆盖已有值。
+        notes, changed = _ensure_globals(lines)
+        for note in notes:  # changed 为假时这里也可能有条提醒（流式写法跳过那种）
+            print(note)
+        if not changed:
+            print(f"{ok('✓')} 链接没变，config.yaml 一个字节没改；只更新节点")
+            return _refresh(old)
+        print(dim("  链接没变：只补了缺的全局设置，订阅块一个字节没动"))
+        if not commit_config(cfg, lines, f"订阅 {SUB_NAME} → {url}（只补缺的全局设置）"):
+            return 1
+        print(dim("  全局设置要重启内核才生效（内核在跑就顺手重启了）；这次不重拉节点"))
+        return _after_write()
 
     print(dim(f"配置文件  {cfg}"))
     print(dim(f"链接      {url}"))
@@ -768,8 +860,8 @@ def cmd_sub_set(args: argparse.Namespace) -> int:
         print(note)
     for note in _ensure_rules(lines):
         print(note)
-    if added := _ensure_globals(lines):
-        print(dim(f"全局      补了 {'、'.join(added)}（已有的一律不碰）"))
+    for note in _ensure_globals(lines)[0]:
+        print(note)
     if not commit_config(cfg, lines, f"订阅 {SUB_NAME} → {url}"):
         return 1
     return _after_write()
