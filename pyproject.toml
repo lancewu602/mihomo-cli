@@ -10,9 +10,9 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
-# 零第三方依赖：装它不会往环境里拖任何东西。以后真要上 TUI（textual 这类），
-# 加 [project.optional-dependencies] 的 extra，别把它变成默认依赖。
+# 零第三方依赖：装它不会往环境里拖任何东西。
 dependencies = []
+
 keywords = ["mihomo", "clash", "clash-meta", "proxy", "cli"]
 classifiers = [
     "Environment :: Console",
@@ -20,6 +20,11 @@ classifiers = [
     "Topic :: System :: Networking",
     "Topic :: Utilities",
 ]
+
+[project.optional-dependencies]
+# 只在构建二进制时需要：pip install '.[build]'（或 make deps 建个 .venv）。
+# 别把它塞进 dependencies：运行时一行都不会 import pyinstaller。
+build = ["pyinstaller>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/lancewu602/mihomo-cli"

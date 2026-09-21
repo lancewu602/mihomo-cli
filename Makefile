@@ -1,0 +1,61 @@
+# 构建 macOS / Linux 二进制。目标机器不需要装 Python。
+#
+#   make deps           建 .venv 并装 PyInstaller（一次性；也可以直接用 PATH 上的 pyinstaller）
+#   make build          目录版：dist/dir/mihomo-cli/mihomo-cli  ← 默认，启动快
+#   make build-onefile  单文件：dist/mihomo-cli（就一个文件，但每次启动都要解包）
+#   make check          跑一遍产物（--help；本机装了 mihomo 时顺带 status）
+#                       make check BIN=dist/mihomo-cli 可以单独验单文件那份
+#   make install        拷到 $(PREFIX)/bin（默认 /usr/local，可能要 sudo）
+#   make clean          删掉 build/ 与 dist/
+#
+# 为什么默认是目录版：单文件每次启动都要把 ~8 MB 解包成一个新的临时可执行文件，
+# 在会逐个校验可执行文件的环境里（本机 macOS 26 就是）实测 --help 要 6 秒；
+# 目录版把这份代价只付一次，之后与源码版一样快。实测数字见 docs/packaging.md。
+# 两个平台命令完全一样；平台差异（架构、glibc、签名）也在那篇里。
+
+PREFIX ?= /usr/local
+VENV   ?= .venv
+DIST   ?= dist
+BUILD  ?= build
+
+ONEFILE = $(DIST)/mihomo-cli
+ONEDIR  = $(DIST)/dir/mihomo-cli/mihomo-cli
+SOURCES = $(wildcard src/mihomo_cli/*.py)
+
+BIN ?= $(ONEDIR)
+
+# .venv 里装了就用它，否则用 PATH 上的
+PYINSTALLER ?= $(if $(wildcard $(VENV)/bin/pyinstaller),$(VENV)/bin/pyinstaller,pyinstaller)
+
+.PHONY: build build-onefile deps check install clean
+
+build: $(ONEDIR)
+build-onefile: $(ONEFILE)
+
+$(ONEFILE): mihomo-cli.spec packaging/entry.py $(SOURCES)
+	$(PYINSTALLER) --clean --noconfirm --distpath $(DIST) --workpath $(BUILD) mihomo-cli.spec
+
+$(ONEDIR): mihomo-cli.spec packaging/entry.py $(SOURCES)
+	MIHOMO_CLI_ONEDIR=1 $(PYINSTALLER) --clean --noconfirm \
+		--distpath $(DIST)/dir --workpath $(BUILD)/dir mihomo-cli.spec
+
+deps:
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install --upgrade pip 'pyinstaller>=6.0'
+
+check:
+	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-dir）"; exit 1; }
+	$(BIN) --help > /dev/null
+	@file $(BIN) | sed 's/^/  /'
+	@ls -lh $(BIN) | awk '{print "  体积: " $$5}'
+	@$(BIN) status > /dev/null 2>&1 && echo "  status 冒烟：通过" \
+		|| echo "  status 冒烟：跳过（本机没装 mihomo，或内核没在跑）"
+
+install:
+	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-dir）"; exit 1; }
+	install -m 0755 $(BIN) $(PREFIX)/bin/mihomo-cli
+	@echo "已装到 $(PREFIX)/bin/mihomo-cli"
+
+clean:
+	rm -rf $(BUILD) $(DIST)
+	@echo "已清掉 $(BUILD)/ $(DIST)/"

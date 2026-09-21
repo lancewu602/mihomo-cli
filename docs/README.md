@@ -6,7 +6,7 @@
 | 文档 | 什么时候看 |
 |---|---|
 | [control-api.md](control-api.md) | 要调 mihomo 控制接口、或改 status / group / sub 的取数逻辑 |
-| [packaging.md](packaging.md) | 改安装方式、加顶层 `.py`、动 `pyproject.toml`、要打成单文件 |
+| [packaging.md](packaging.md) | 要构建二进制、改安装方式、加模块、动 `pyproject.toml` |
 
 ## 分发
 
@@ -25,7 +25,11 @@
   （带 `文件:行号`，改了要一起更新）。
 - 新增模块：直接放进 `src/mihomo_cli/`、用相对 import（`from .core import ...`），
   **没有模块清单要维护**。包清单是 `package-dir {"" = "src"}` + `packages = ["mihomo_cli"]`，整个包一起走。
-- 包内不要“直接执行某个 .py”来跑入口（相对 import 会失败），要么 `PYTHONPATH=src python3 -m mihomo_cli`，
+  二进制构建也不用改：`mihomo-cli.spec` 与 `Makefile` 关心的是入口和 `src/mihomo_cli/*.py` 通配。
+- 换了入口函数（`cli.main` 改名之类）：`pyproject.toml` 的 `[project.scripts]` 与 `packaging/entry.py` 一起改。
+- 新增对外部命令的依赖（比如又调了个 `ip` / `iptables`）：`packaging.md` 里"二进制里只有这个 CLI"
+  那节要补一句——那些命令不会被打进二进制。
+- 包内不要"直接执行某个 .py"来跑入口（相对 import 会失败），要么 `PYTHONPATH=src python3 -m mihomo_cli`，
   要么用仓库根的 `mihomo-cli` shim。新入口的异常兜底放在 `src/mihomo_cli/cli.py` 的 `main()` 里。
 - 这里只写依然成立的结论；被推翻的方案（比如试过但放弃的）也写清楚**为什么**放弃，
   免得下一个人再走一遍。

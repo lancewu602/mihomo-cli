@@ -62,7 +62,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 | 文档 | 什么时候看 |
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
-| [docs/packaging.md](docs/packaging.md) | 目录结构、安装/打包路线、`console_scripts` 的异常兜底坑 |
+| [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，
@@ -81,26 +81,32 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 ## 安装
 
-需要本机已装 mihomo，以及 Python 3.9+。
-
-**推荐：装成独立命令**（跟系统 Python 解耦，也方便以后升级）——本工具零第三方依赖，
-装它不会往环境里拖任何东西：
+### 二进制（推荐：目标机器不需要装 Python）
 
 ```bash
 git clone git@github.com:lancewu602/mihomo-cli.git && cd mihomo-cli
-uv tool install .          # 或者 pipx install .
-uv tool upgrade mihomo-cli # 更新
+make deps && make build        # → dist/dir/mihomo-cli/mihomo-cli
+sudo make install              # 拷到 /usr/local/bin（PREFIX=... 可改）
 ```
 
-**不想装包管理器**：直接 symlink 仓库根的 `mihomo-cli` shim（模块已在 `src/mihomo_cli/` 包里，
-包内文件不能直接 symlink，原因写在 `docs/packaging.md`）：
+`make build-onefile` 出单文件版（8.3 MB，好拷贝）；默认给的是目录版，因为单文件每次启动
+都要解包：本机 macOS 26 实测 `--help` 单文件 6 秒 / 目录版 0.1 秒（源码版也是 0.1 秒）。
+两种产物的实测数字、macOS 签名与 Linux glibc 注意事项都在 `docs/packaging.md`。
+
+### 本机有 Python 时
 
 ```bash
+uv tool install .          # 或者 pipx install .；跟系统 Python 解耦，升级方便
+uv tool upgrade mihomo-cli # 更新
+
+# 不装包管理器：symlink 仓库根的 shim（包内文件不能直接 symlink，原因见 docs/packaging.md）
 ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli
-PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装：在仓库目录里这么跑（src 布局要带 PYTHONPATH）
+PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装，在仓库目录里就能跑
 ```
 
-然后：
+### 还要装 mihomo 本体
+
+二进制和 pip 包都**只含这个 CLI**，内核得目标机器自己有：
 
 ```bash
 # macOS
