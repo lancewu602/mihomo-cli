@@ -69,6 +69,16 @@ reset [--hard]           清空配置：config.yaml 清成最小骨架（顶部�
                          系统代理、删掉订阅缓存；--hard 连工具备份一起删（放弃回滚）。
                          **不新建备份**，靠 mihomo -t 校验 + 内存还原兜底
 
+config                   全局设置：不给子命令就看现状（config.yaml 里的值 + 内核运行时值，
+                         不一致会标出来）
+config mode <值>         运行模式：rule 按规则分流 / global 全部走 GLOBAL 组 / direct 全部直连
+config log-level <值>    日志级别：silent / error / warning / info / debug（仅控制台与控制页面）
+config allow-lan <值>    允许其他设备经代理端口上网：true / false
+                         **三项都是写 config.yaml + 内核当场生效**（PATCH /configs，不用重启）：
+                         落盘保证重启后还是这个值，PATCH 保证现在这一刻就生效；
+                         allow-lan 会把代理端口从 127.0.0.1 改成绑所有网卡（实测当场就重新绑上），
+                         等于把代理给整个局域网，只在自己信得过的网络里开
+
 nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
 status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
 
@@ -77,7 +87,8 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 每个子命令的开关：`mihomo-cli <命令> --help`。
 
-除了订阅那一块（`sub set`），改 `config.yaml`（规则、geodata、策略组默认选中）都是手工活：本工具不碰它。
+除了订阅那一块（`sub set`）和 `config` 那三项（mode / log-level / allow-lan），改 `config.yaml` 的东西
+（规则、geodata、策略组默认选中）都是手工活：本工具不碰它。
 `group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板（`external-controller`）即可。
 
 ## 文档

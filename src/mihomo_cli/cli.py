@@ -14,6 +14,7 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
     nic [网卡名]       固定系统代理用哪张网卡（仅 macOS）；不固定就跟着活跃网卡走
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     sub   set|update|show   订阅：只支持一个链接，节点由内核自己拉
+    config [mode|log-level]  全局设置：看现状，或者改 mode / log-level（写 config.yaml + 内核当场生效）
     reset [--hard]    清空配置：config.yaml 清成最小骨架（顶部注释 + mixed-port）
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     status            内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性
@@ -23,6 +24,10 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
 自己按 url 拉（本工具不下载、不解析节点）；`sub update` 让内核当场重拉。`reset` 反过来：把
 config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--hard 连备份一起删）。规则 / geodata /
 策略组不做：那是手工活，或者用 mihomo 自带的控制面板。
+
+全局设置只做两项：`config mode`（rule / global / direct）与 `config log-level`
+（silent / error / warning / info / debug）。这两个值域封闭、内核的 `PATCH /configs` 也支持，
+所以落盘之后能让运行中的内核当场生效（不用断一下代理）；其余全局项一律不碰。
 
 启停内核只是替你把 `brew services` / `systemctl` 那两条命令打出来，常驻与开机自启仍归服务
 管理器；**本工具不自己 fork mihomo**。
@@ -42,6 +47,7 @@ import argparse
 import os
 import sys
 
+from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
@@ -60,6 +66,10 @@ SUBCOMMANDS = {
         cmd_sub,
     ),
     "reset": ("清空配置：config.yaml 清成最小骨架（--hard 连备份一起删）", cmd_reset),
+    "config": (
+        "全局设置：看现状，或者改 mode / log-level（写盘 + 内核当场生效）",
+        cmd_config,
+    ),
     "status": ("查看当前状态（默认）", cmd_status),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
@@ -75,7 +85,8 @@ if not IS_MACOS:
 # 已经删掉的命令不再给指路：敲 `proxy` / `kernel` / `restart` / `sub add` 就是 argparse 的
 # invalid choice。本工具不背旧版本兼容（旧配置里的 `sub:` 也不会被认成本工具的订阅）。
 # sub set 要 mihomo：写完配置靠 `mihomo -t` 校验。show 是纯读；update 走控制接口或
-# 服务管理器，两者都用不到这个可执行文件，没装内核也该能用。
+# 服务管理器，两者都用不到这个可执行文件，没装内核也该能用。config 同理：不带子命令（看
+# 现状）只读配置 + 问一下控制接口，带了子命令才写盘、才要 `mihomo -t`。
 SUB_NEEDS_KERNEL = {"set"}
 
 
@@ -95,6 +106,8 @@ def _needs_kernel(args: argparse.Namespace) -> bool:
         return False
     if args.action == "sub":
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL
+    if args.action == "config":  # 看现状是纯读；只有两个 setter 写盘
+        return getattr(args, "config_action", None) is not None
     return True
 
 
@@ -179,6 +192,29 @@ def _main(argv: list[str] | None = None) -> int:
                 action="store_true",
                 help="序号按 `sub nodes --delay` 那个顺序数（默认按订阅原顺序）",
             )
+        if fn is cmd_config:
+            csub = p.add_subparsers(dest="config_action")
+            cm = csub.add_parser(
+                "mode",
+                help="运行模式：rule 按规则分流 / global 全部走 GLOBAL 组 / direct 全部直连",
+            )
+            cm.add_argument("value", choices=MODES, metavar="{" + ",".join(MODES) + "}")
+            cl = csub.add_parser(
+                "log-level",
+                help=(
+                    "日志级别：silent 不输出 / error 只输出错误 / warning 加不影响运行的错 / "
+                    "info 加一般运行 / debug 全量（仅控台与控制页面）"
+                ),
+            )
+            cl.add_argument("value", choices=LOG_LEVELS, metavar="{" + ",".join(LOG_LEVELS) + "}")
+            ca = csub.add_parser(
+                "allow-lan",
+                help=(
+                    "允许其他设备经代理端口上网（true 等于把代理给整个局域网，"
+                    "只在自己信得过的网络里开）"
+                ),
+            )
+            ca.add_argument("value", choices=BOOLS, metavar="{" + ",".join(BOOLS) + "}")
         if fn is cmd_reset:
             p.add_argument(
                 "--hard",
