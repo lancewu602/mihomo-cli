@@ -72,19 +72,40 @@ GROUP_URL_INTERVAL = 300  # url-test 的测速间隔（秒），跟 provider 的
 GROUP_TOLERANCE = 50  # url-test 的切换容差（ms）：比当前最快的慢这么多才换，免得来回跳
 
 # 建骨架时补的分流规则，插在兜底 `MATCH,节点选择` **之前**（顺序就是匹配顺序，很重要）。
-# 只补这一条的理由：按域名判定（GEOSITE），不触发 DNS 解析，所以没有 GEOIP 那个
-# “域名被解析成海外 IP、结果没直连”的坑；代价是只要 GeoSite.dat 一个数据文件。
-# 想要更全（GEOIP,CN 兜底）、或者要广告拦截（GEOSITE,category-ads-all,REJECT），
-# 自己往 rules 里加就行：本工具只在「rules 为空或只有自己那条 MATCH」时才动手。
-SPLIT_RULES = [("GEOSITE,cn", "DIRECT")]
+# 三条都是按域名判定（GEOSITE）：不触发 DNS 解析，所以没有 GEOIP 那个「域名被解析成海外 IP、
+# 结果没直连」的坑；代价是只要 GeoSite.dat 一个数据文件（下面 GEOX_MIRROR 那份里就有）。
+#
+# 为什么是这三条（数据是拿现配置实测的，见 docs/subscription.md）：
+#   · private → DIRECT：局域网 / 私有地址不该送去代理（131 条）；
+#   · category-ads-all → REJECT：**这条是换到 v2ray-rules-dat 之后白拿的**——那份
+#     geosite.dat 把 EasyList + EasyListChina + AdGuard DNS Filter + Peter Lowe + Dan Pollock
+#     全并进了这个类别，实测 190,384 条（MetaCubeX 那份只有 911 条）；
+#   · cn → DIRECT：国内直连，111,177 条。
+# 想要更全（`GEOIP,CN` 兜底要 geoip.dat，见 geodata-mode）、或者要别的分流（`GEOSITE,gfw`、
+# `GEOSITE,geolocation-!cn`），自己往 rules 里加就行：本工具只在「rules 为空、只有自己那条
+# MATCH、或者前面正好是本工具规则的前缀（老版本建的骨架）」时才动手。
+SPLIT_RULES = [
+    ("GEOSITE,private", "DIRECT"),
+    ("GEOSITE,category-ads-all", "REJECT"),
+    ("GEOSITE,cn", "DIRECT"),
+]
+# 本工具历史上写出来过的骨架形状（**不含**兜底 MATCH），按时间顺序排。升级路径靠它：
+# 认出「原样」的老骨架，就把缺的规则插到正确位置（跟「链接没变也要补缺的全局键」一个道理）。
+# 故意**不**认「自己删掉一条的骨架」：那跟老骨架长得一模一样，分不清；用户手工删掉某条
+# （比如不想拦广告）时宁可一个字节不动，也不能偷偷给他加回去。以后骨架再长，
+# 把变化前的那份 SPLIT_RULES 追加到这个列表里就行。
+LEGACY_SPLIT_RULES = [
+    [],  # v1：rules 里只有兜底 MATCH
+    [("GEOSITE,cn", "DIRECT")],  # v2：只有国内直连那一条
+]
 
 # 建骨架时要补的全局标量（顶层键 + 值）。顺序就是写进配置里的顺序，大致跟手册 general 那页
 # 的排法对齐：运行模式 / 日志级别 / IPv6 / 控制接口 / 统一延迟 / TCP 并发 / geodata。
 #
-# 里面**只有两项是内核默认值做不到的**（`geox-url` 和 `external-controller`，各自下面写了
-# 原因），其余都是「内核默认值本来就对」或者「只差一个键」的口味项，照样写出来是因为这份
-# 骨架是给人读的：`sub set` 完 config.yaml 里能一眼看到本工具依赖哪几项，不用去翻手册。
-# 每一项都能自己改——已有的键一律不覆盖，删掉或改掉都行（嵌套节也只补缺的子键）。
+# 里面**只有三项是内核默认值做不到的**（`geox-url`、`geodata-mode` 和 `external-controller`，
+# 各自下面写了原因），其余都是「内核默认值本来就对」或者「只差一个键」的口味项，照样写出来
+# 是因为这份骨架是给人读的：`sub set` 完 config.yaml 里能一眼看到本工具依赖哪几项，不用去
+# 翻手册。每一项都能自己改——已有的键一律不覆盖，删掉或改掉都行（嵌套节也只补缺的子键）。
 GLOBAL_SCALARS = (
     # 内核默认就是 rule。显式写出来是因为这份骨架的分流（GEOSITE + 兜底 MATCH）只在
     # rule 模式下成立：换成 global 或 direct，rules 整段失效。
@@ -109,24 +130,58 @@ GLOBAL_SCALARS = (
     # （interval 24 也是内核默认值，写出来同样是自文档化）。
     ("geo-auto-update", "true"),
     ("geo-update-interval", "24"),
+    # **内核默认 false，这里是打开**，而且必须跟着 `geox-url` 一起改——两项是一套的：
+    #   · 不开的话 GEOIP 规则走的是 mmdb（geox-url 里的 `mmdb:`），我们换的 `geoip:`（那份
+    #     16.9 MB 的 geoip.dat）等于白换，实测就是这个结论；
+    #   · 开了之后 GEOIP 国家名**会被 `mihomo -t` 校验**（类名写错 → `[GeoIP] failed to
+    #     decode geodata file: GeoIP.dat … country code nosuchcountry` → 校验失败 → 回滚），
+    #     而 mmdb 模式下 `GEOIP,ZZTOP` 这种写错居然能过——对「写完就验证」的流程是白拿的一道
+    #     护栏；
+    #   · 附带白拿的类别：`geoip:telegram`(12) / `netflix`(120) / `google`(8360) /
+    #     `cloudflare`(710) / `cloudfront`(211) / `facebook`(123) / `twitter`(19) / `tor`(798)
+    #     / `fastly`(90)，见 v2ray-rules-dat 的 README。
+    # 代价：`geo-auto-update` 每天会按 geodata 的 enable 情况刷文件，开了它刷的就是这两份
+    # .dat（11.1 + 16.9 MB），比 mmdb 那套（4.2 + 8.5 MB）多一点——数据更全的代价。
+    ("geodata-mode", "true"),
 )
-# 数据文件的下载源。**内核 DefaultRawConfig 里四项全是 github.com**（v1.19.31 实测：不写
+# 数据文件的下载源 —— **geosite / geoip 以 Loyalsoldier/v2ray-rules-dat 为准**，mmdb / ASN
+# 两份它不提供，继续指 MetaCubeX 的镜像（理由在各自变量的注释里）。
+#
+# **内核 DefaultRawConfig 里四项全是 github.com**（v1.19.31 实测：不写
 # geox-url 时内核去连 20.205.243.166:443 也就是 github，302 之后超时；同一时刻还有一条
 # 连 objects.githubusercontent.com 185.199.109.133:443 的 SYN_SENT 卡着）——手册 general 那页
 # `geox-url` 代码块里的 jsdelivr 地址是**示例值**，不是内核默认值。
 # 为什么必须在写配置前就换掉：分流规则要用 GeoSite.dat，而 `mihomo -t` 校验配置时内核就会
 # 去初始化 geosite——没镜像连校验都过不了，`sub set` 会被自己的校验挡回来（写完 → 校验
-# 失败 → 回滚）。换镜像后实测 2.9 秒下完、`Finished initial GeoSite rule cn => DIRECT,
-# records: 111021`。
-# 为什么四项一起换：`geo-auto-update` 打开后，内核按 geodata 的 enable 情况**并发**刷
+# 失败 → 回滚）。
+# 为什么换成 v2ray-rules-dat 这份（实测对比，数字见 docs/subscription.md）：
+#   · `category-ads-all` 一个类别的记录数 911 → **190,384**（它把 EasyList / EasyListChina /
+#     AdGuard DNS Filter / Peter Lowe / Dan Pollock 全并进去了），所以骨架里那条
+#     `GEOSITE,category-ads-all,REJECT` 才真的算「广告拦截」，零额外依赖；
+#   · 本工具文档里列的那批类别在这份里 77/77 全都在（两家都源自 v2fly/domain-list-community），
+#     条数基本一致（cn 111,177 / geolocation-!cn 27,248 / google 1075 …）；
+#   · 白拿一批它特有的：`china-list` 110,433、`apple-cn` 165、`google-cn` 112、`tld-cn` 49、
+#     `icloud` 53、`steam@cn` 17、`category-games@cn` 38、`win-spy` 327、`win-update` 364。
+# 代价：首次 `mihomo -t` 要下 11.1 MB（实测 5.8 秒；有 GEOIP 规则时再加 16.9 MB 的
+# geoip.dat，7.8 秒），之后启动 279ms。
+# 为什么四项一起写：`geo-auto-update` 打开后，内核按 geodata 的 enable 情况**并发**刷
 # GeoSite / MMDB / ASN（component/updater/update_geo.go 的 updateGeoDatabases），各走各的
 # geox-url——只换 geosite 的话，用户按文档建议加一条 `GEOIP,CN` 之后，24 小时的 tick 就
-# 去撞 github 了。实测四项镜像都能下：geosite 4.2 MB / geoip.metadb 8.5 MB /
-# ASN.mmdb 12 MB（`IP-ASN,15169` 规则实测触发下载，6 秒完）。
-GEOX_MIRROR = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release"
-# ASN 那个文件（GeoLite2-ASN.mmdb）MetaCubeX/meta-rules-dat 不发，用手册 geox-url 示例里
-# 那个源。
-GEOX_ASN = "https://testingcf.jsdelivr.net/gh/xishang0128/geoip@release/GeoLite2-ASN.mmdb"
+# 去撞 github 了。四份实测都能下：geosite 11.1 MB / geoip 16.9 MB / geoip.metadb 8.5 MB /
+# ASN.mmdb 12.1 MB（`IP-ASN,15169` 规则实测触发下载，6 秒完）。
+GEOX_MIRROR = "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release"
+# mmdb / ASN 这两份 v2ray-rules-dat 不提供：它的 release 分支全清单只有 geoip.dat、geosite.dat
+# 加一堆 .txt（direct-list / proxy-list / reject-list / china-list / apple-cn / google-cn /
+# gfw / win-spy / win-update / win-extra，都是**纯域名一行一条**的明文，没有 v2ray 的
+# `full:`/`domain:` 前缀——理论上能当 `behavior: domain` 的 rule-provider，但 geosite.dat
+# 里已经打包了同样的内容，没必要）。所以这两项继续用 MetaCubeX 的镜像：
+#   · `mmdb:` 只在 `geodata-mode: false` 时才被 GEOIP 规则用到——留它是为了用户把手改回去
+#     时不至于回落内核默认那个 github URL；
+#   · `asn:` 是 `IP-ASN,15169` 这类规则要的，12,103,050 字节、sha256 `7dcc428e…`，**和手册
+#     示例里那个 xishang0128/geoip 源逐字节相同**（下载下来算过），但 MetaCubeX 更新更快
+#     （2026-09-21 08:21 vs 09-17），所以指 MetaCubeX、少一个第三方仓库。
+GEOX_META = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release"
+GEOX_ASN = f"{GEOX_META}/GeoLite2-ASN.mmdb"
 # 要补的嵌套块（顶层键 + 节里的行）。值写成最终文本：URL 要引号，布尔值不能引（引了就成了字符串）。
 GLOBAL_BLOCKS = (
     (
@@ -134,8 +189,9 @@ GLOBAL_BLOCKS = (
         (
             f'geosite: "{GEOX_MIRROR}/geosite.dat"',
             f'geoip: "{GEOX_MIRROR}/geoip.dat"',
-            # mmdb 用 geoip.metadb：内核默认那个 URL 指的就是这个文件，只换主机不换东西。
-            f'mmdb: "{GEOX_MIRROR}/geoip.metadb"',
+            # mmdb 用 MetaCubeX 的 geoip.metadb：v2ray-rules-dat 不提供 mmdb，而这项只在把
+            # `geodata-mode` 改回 false 时才轮到它。内核默认那个 URL 指的就是这个文件。
+            f'mmdb: "{GEOX_META}/geoip.metadb"',
             f'asn: "{GEOX_ASN}"',
         ),
     ),
@@ -546,12 +602,21 @@ def _our_provider(lines: list[str], strict: bool = True) -> dict | None:
     return next((p for p in _providers(lines, strict=strict) if p["name"] == SUB_NAME), None)
 
 
-def _ensure_rules(lines: list[str]) -> list[str]:
-    """保证 rules 里有「分流规则 + 兜底 MATCH」。返回给用户看的说明。
+def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
+    """保证 rules 里有「分流规则 + 兜底 MATCH」。返回 (给用户看的说明, 有没有真改过 lines)。
 
-    **只在能确认是自己写的骨架时才动**：rules 里要么空着，要么**只有一条**
-    `MATCH,节点选择`。有任何别的规则就一个字节不碰（那是用户自己的分流）；
-    已有 MATCH 指向别的组时也只提示、不抢——偷偷改用户的规则比不改更糟。
+    **只在能确认是自己写的骨架时才动**：rules 里要么空着，要么**只有**一条 MATCH，
+    要么**正好是历史版本写的某套骨架**（见 LEGACY_SPLIT_RULES）。
+    有任何别的规则就一个字节不碰（那是用户自己的分流）；已有 MATCH 指向别的组时也只提示、
+    不抢——偷偷改用户的规则比不改更糟。
+
+    为什么要认「老骨架」：骨架是会长的（v1 只写了 `GEOSITE,cn,DIRECT`，v2 前面又多了
+    `private` 和 `category-ads-all`）。要是只认「整套一模一样」，从老版本升上来的配置就永远
+    补不上新规则了——跟「链接没变时也要补缺的全局键」是同一个道理。
+
+    第二个返回值跟 `_ensure_globals()` 同款（也为了同一条路）：调用方得区分「这次一个字节
+    都不改」和「补了缺的规则，得写盘 + 重启」——不能拿说明非空当依据，说明里那几种
+    「你自己写的、没动」也是不改 lines 的。
     """
     items = _rule_items(lines)
     match = _match_rule(lines)
@@ -564,20 +629,18 @@ def _ensure_rules(lines: list[str]) -> list[str]:
             lines[rspan[1] : rspan[1]] = block
         else:
             _new_section(lines, "rules:", block)
-        return [dim(f"规则      补了 {_rule_names()} + MATCH,{GROUP_NAME}")]
+        return [dim(f"规则      补了 {_rule_names()} + MATCH,{GROUP_NAME}")], True
 
-    if items == [f"MATCH,{GROUP_NAME}"] and match is not None:
-        # 只有我们那条兜底 MATCH（旧版建的骨架）：把分流规则插在它前面。
-        # 缩进照抄那一行——混缩进的话 YAML 序列会直接解析失败。
-        at = lines[match[0]]
-        indent = at[: len(at) - len(at.lstrip())]
-        lines[match[0] : match[0]] = [
-            f"{indent}- {name},{target}\n" for name, target in SPLIT_RULES
-        ]
-        return [dim(f"规则      补了 {_rule_names()}（原来只有兜底 MATCH，插在它前面）")]
+    if match is not None and items[-1] == f"MATCH,{GROUP_NAME}":
+        mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
+        have = items[:-1]
+        if have != mine and any(have == _rule_items_of(r) for r in LEGACY_SPLIT_RULES):
+            add = _insert_missing_rules(lines, have, mine, match[0])
+            where = "插在自己那几条规则前面" if have else "插在它前面"
+            return [dim(f"规则      补了 {'、'.join(add)}（老骨架，{where}）")], True
 
     if items == _skeleton_rule_items():
-        return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 MATCH），没动")]
+        return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 MATCH），没动")], False
 
     if len(items) == 1 and items[0].upper().startswith("MATCH"):
         note.append(
@@ -588,16 +651,47 @@ def _ensure_rules(lines: list[str]) -> list[str]:
         )
     else:
         note.append(dim(f"规则      你自己写了 {len(items)} 条规则，一个字节没动"))
-    return note
+    return note, False
 
 
 def _split_rule_lines() -> list[str]:
     return [f"  - {name},{target}\n" for name, target in SPLIT_RULES]
 
 
+def _rule_items_of(rules: list[tuple[str, str]]) -> list[str]:
+    """把 (规则名, 目标) 列表转成 rules 里的项文本（识别骨架用）。"""
+    return [f"{name},{target}" for name, target in rules]
+
+
+def _insert_missing_rules(
+    lines: list[str], have: list[str], mine: list[str], match_line: int
+) -> list[str]:
+    """把 mine 里 `have` 没有的那几条插到**正确位置**（顺序就是匹配顺序）。
+
+    插在哪：插在「已有的、且在 mine 里排在它后面的第一条」前面；后面没有已有的了，
+    就插在兜底 MATCH 前面。从后往前插，行号不会被前面的插入带偏。
+
+    缩进照抄被插入位置那一行——混缩进的话 YAML 序列会直接解析失败。"""
+    span = _section_span(lines, "rules")
+    assert span is not None  # 调用方已经确认 rules 节存在
+    rows = [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
+    plan: dict[int, list[str]] = {}
+    for item in mine:
+        if item in have:
+            continue
+        after = [h for h in have if mine.index(h) > mine.index(item)]
+        at = rows[have.index(after[0])] if after else match_line
+        plan.setdefault(at, []).append(item)
+    for at in sorted(plan, reverse=True):
+        row = lines[at]
+        indent = row[: len(row) - len(row.lstrip())]
+        lines[at:at] = [f"{indent}- {item}\n" for item in plan[at]]
+    return [item for item in mine if item not in have]
+
+
 def _skeleton_rule_items() -> list[str]:
     """本工具建骨架时会写出来的规则项（用来识别“已经是我们的骨架”）。"""
-    return [f"{name},{target}" for name, target in SPLIT_RULES] + [f"MATCH,{GROUP_NAME}"]
+    return [*_rule_items_of(SPLIT_RULES), f"MATCH,{GROUP_NAME}"]
 
 
 def _rule_names() -> str:
@@ -621,8 +715,9 @@ def _ensure_globals(lines: list[str]) -> tuple[list[str], bool]:
     说明那半边跟 _ensure_group/_ensure_rules 一个风格，每条自己带前缀；**已有的值一律不碰**。
 
     见 GLOBAL_SCALARS / GLOBAL_BLOCKS：运行模式、日志级别、IPv6、控制接口、统一延迟、
-    TCP 并发、geodata 自动更新、geox-url 四个下载源、profile.store-selected。其中只有
-    `geox-url`（默认源 github.com，连 `mihomo -t` 都会被卡住）和 `external-controller`
+    TCP 并发、geodata 自动更新、geodata 模式、geox-url 四个下载源、profile.store-selected。
+    其中只有 `geox-url`（默认源 github.com，连 `mihomo -t` 都会被卡住）、`geodata-mode`
+    （默认 false，不开的话 geox-url 里换的 geoip.dat 不生效）和 `external-controller`
     （内核默认不监听，本工具一半的命令靠它）是内核默认值做不到的；其余是默认值或口味项，
     写出来是为了让这份配置自解释。
 
@@ -832,19 +927,21 @@ def cmd_sub_set(args: argparse.Namespace) -> int:
         )
 
     if old is not None and (old["keys"].get("url") or "") == url:
-        # 链接没变：正常情况下一个字节都不改，只让内核重拉节点。**唯一的例外是缺的全局
-        # 设置**——0.1.x 建的骨架里没有 external-controller / ipv6 那几项，不补的话本工具
-        # 自己的 status / sub nodes / sub use 全是废的。只补缺的、绝不覆盖已有值。
+        # 链接没变：正常情况下一个字节都不改，只让内核重拉节点。**唯一的例外是骨架缺件**：
+        # 老版本建的配置里没有 external-controller / geodata-mode 那几项（不补的话本工具自己的
+        # status / sub nodes / sub use 全是废的），rules 里也少 private / category-ads-all 两条
+        # （不补的话「升级」等于没升）。只补缺的、绝不覆盖已有的值，订阅块一行都不碰。
         notes, changed = _ensure_globals(lines)
-        for note in notes:  # changed 为假时这里也可能有条提醒（流式写法跳过那种）
+        rule_notes, rules_changed = _ensure_rules(lines)
+        for note in [*notes, *rule_notes]:  # changed 为假时这里也可能有条提醒（流式写法那种）
             print(note)
-        if not changed:
+        if not changed and not rules_changed:
             print(f"{ok('✓')} 链接没变，config.yaml 一个字节没改；只更新节点")
             return _refresh(old)
-        print(dim("  链接没变：只补了缺的全局设置，订阅块一个字节没动"))
-        if not commit_config(cfg, lines, f"订阅 {SUB_NAME} → {url}（只补缺的全局设置）"):
+        print(dim("  链接没变：只补了缺的骨架（全局设置 / 规则），订阅块一个字节没动"))
+        if not commit_config(cfg, lines, f"订阅 {SUB_NAME} → {url}（只补缺的骨架）"):
             return 1
-        print(dim("  全局设置要重启内核才生效（内核在跑就顺手重启了）；这次不重拉节点"))
+        print(dim("  补的东西要重启内核才生效（内核在跑就顺手重启了）；这次不重拉节点"))
         return _after_write()
 
     print(dim(f"配置文件  {cfg}"))
@@ -858,7 +955,7 @@ def cmd_sub_set(args: argparse.Namespace) -> int:
     _put_provider(lines, url, old)
     for note in _ensure_group(lines):
         print(note)
-    for note in _ensure_rules(lines):
+    for note in _ensure_rules(lines)[0]:
         print(note)
     for note in _ensure_globals(lines)[0]:
         print(note)

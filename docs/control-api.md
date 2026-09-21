@@ -44,9 +44,9 @@
 | `src/mihomo_cli/status.py:129` | `GET /version` | 判断控制接口可用 |
 | `src/mihomo_cli/kernel.py:65` / `:87` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
 | `src/mihomo_cli/kernel.py:113` / `:103` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
-| `src/mihomo_cli/subs.py:707` / `:710` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+| `src/mihomo_cli/subs.py:802` / `:805` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
 
-写接口两个：`src/mihomo_cli/subs.py:742` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+写接口两个：`src/mihomo_cli/subs.py:837` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
 以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`；
 以及 `src/mihomo_cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
 

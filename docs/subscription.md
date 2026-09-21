@@ -110,15 +110,17 @@ proxy-groups:
     tolerance: 50
 ```
 
-**一条分流规则 + 兜底 MATCH**（顺序就是匹配顺序，分流规则必须在 MATCH 之前）：
+**三条分流规则 + 兜底 MATCH**（顺序就是匹配顺序，分流规则必须在 MATCH 之前）：
 
 ```yaml
 rules:
-  - GEOSITE,cn,DIRECT         # 国内域名直连（按域名判定，不触发 DNS 解析）
-  - MATCH,节点选择             # 其余走代理
+  - GEOSITE,private,DIRECT          # 局域网 / 私有地址直连（131 条）
+  - GEOSITE,category-ads-all,REJECT # 广告域名拦截（190,384 条，见下）
+  - GEOSITE,cn,DIRECT               # 国内域名直连（按域名判定，不触发 DNS 解析）
+  - MATCH,节点选择                   # 其余走代理
 ```
 
-**全局设置：八个标量 + 两个嵌套节**（插在 `mixed-port` 后面；每一项都是独立的顶层键，已有就不碰）：
+**全局设置：九个标量 + 两个嵌套节**（插在 `mixed-port` 后面；每一项都是独立的顶层键，已有就不碰）：
 
 ```yaml
 mode: rule                    # 运行模式：这份骨架的分流只在 rule 下成立
@@ -129,15 +131,19 @@ unified-delay: true           # 延迟算 RTT，url-test 的延迟才同口径
 tcp-concurrent: true          # 解析出的多个 IP 并发连，取先成功的
 geo-auto-update: true         # geodata 数据文件按间隔检查新版
 geo-update-interval: 24       # 每 24 小时检查一次
-geox-url:                     # ← 四项都得换源，见下
-  geosite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
-  geoip:   "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+geodata-mode: true            # ← GEOIP 走 geoip.dat（跟下面 geox-url 是一套的）
+geox-url:
+  geosite: "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+  geoip:   "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
   mmdb:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb"
-  asn:     "https://testingcf.jsdelivr.net/gh/xishang0128/geoip@release/GeoLite2-ASN.mmdb"
+  asn:     "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"
+profile:
+  store-selected: true        # 选中的节点写进 cache.db，重启后还是它（`sub use` 靠这个）
 ```
 
-其中**只有两项是内核默认值做不到的**：`geox-url`（默认源 github.com，连 `mihomo -t`
-都会被卡住）和 `external-controller`（内核默认不监听，而 `status` / `sub nodes` /
+其中**只有三项是内核默认值做不到的**：`geox-url`（默认源 github.com，连 `mihomo -t`
+都会被卡住）、`geodata-mode`（默认 false，不开的话 geox-url 里换的 `geoip.dat` 不生效）、
+和 `external-controller`（内核默认不监听，而 `status` / `sub nodes` /
 `sub use` / `sub update` 全走控制接口）。其余几项要么是内核默认值、要么只差一个键，
 写出来是为了让这份配置自解释——你不用翻手册就知道本工具依赖哪几项、怎么改回去。
 
@@ -160,6 +166,18 @@ geox-url:                     # ← 四项都得换源，见下
   这项跟它对得上。
 - **`tcp-concurrent: true`**：内核默认 false。把 DNS 解析出的多个 IP 并发连、取先成功的，
   等于少一次「这个 IP 不通，等超时再试下一个」的等待，代价是多几次握手。
+- **`geodata-mode: true`**：**这项是主动改掉内核默认的 `false`**，而且**必须跟 `geox-url`
+  一起改**，两项是一套的：
+  - 不开的话 `GEOIP` 规则用的是 mmdb（`geox-url` 里的 `mmdb:`），我们换的 `geoip:`（那份
+    16.9 MB 的 `geoip.dat`）等于白换——实测就是这个结论；
+  - 开了之后 GEOIP 国家名**会被 `mihomo -t` 校验**：写成 `GEOIP,ZZTOP` 这种，校验直接失败
+    （`[GeoIP] failed to decode geodata file: GeoIP.dat … country code nosuchcountry`），
+    而 mmdb 模式下同样写错**居然能过**。对「写完就 `-t`、不过就回滚」的流程，这是一道白拿的护栏；
+  - 附带白拿一批类別（v2ray-rules-dat 的 README 列的）：`geoip:telegram`(12 条) /`netflix`(120)
+    /`google`(8360) /`cloudflare`(710) /`cloudfront`(211) /`facebook`(123) /`twitter`(19) /`tor`(798)
+    /`fastly`(90)。
+  - 代价：`geo-auto-update` 每天按 geodata 的 enable 情况刷文件，开了它刷的是这两份 `.dat`
+    （11.1 + 16.9 MB），比 mmdb 那套（4.2 + 8.5 MB）多一点——数据更全的代价。
 
 设计说明：
 
@@ -169,17 +187,26 @@ geox-url:                     # ← 四项都得换源，见下
 - **只在“建骨架”时建这两个组**。你已经手写了 `proxy-groups` 的话，本工具**不新建组**：有同名组
   （`节点选择`）就只补一行 `use:`；没有就只写 provider，并提示“没有任何组在用这个订阅，节点
   不会被用到”。这是为了让“只管一个订阅”的边界清楚：你的组是你的。
-- **规则只在能确认是自己写的骨架时才动**（`_ensure_rules()`）：rules 里要么空着、要么**只有一条**
-  `MATCH,节点选择`。有任何别的规则就一个字节不碰——那是你自己的分流。所以装了订阅之后想加
-  `GEOIP,CN`、或者 `GEOSITE,category-ads-all,REJECT` 拦广告，直接往 `rules` 里写就是，工具以后
-  不会去动它们（它只认「空」和「只有我那条 MATCH」两种状态）。
-- **只补一条 `GEOSITE,cn` 是刻意的保守选择**：按**域名**判定，不触发 DNS 解析，也就没有
-  `GEOIP,CN` 那个“域名被解析成海外 IP、结果没直连”的坑（手册在 rules 那页专门提了这件事）；
-  代价是只覆盖域名类请求，直连 IP 的请求仍会走代理。
+- **规则只在能确认是自己写的骨架时才动**（`_ensure_rules()`）：rules 里要么空着，要么**只有一条**
+  `MATCH,节点选择`，要么**正好是历史版本写出来的那套骨架**（`LEGACY_SPLIT_RULES`：v1 = 只有
+  `GEOSITE,cn,DIRECT`，v0 = 一条规则都没有）。有任何别的规则就一个字节不碰——那是你自己的分流。
+  所以装上订阅之后想再加 `GEOIP,CN`、`GEOSITE,gfw`、自定义 `DOMAIN-SUFFIX,…`，直接往 `rules`
+  里写就是，工具以后不会去动它们。
+  故意**不**认「骨架里被删掉一条」的情形（比如你不想拦广告、把 `category-ads-all` 那条删了）：
+  那跟老骨架长得一模一样，分不清；宁可一个字节不动，也不能把你删掉的拦截规则偷偷加回去。
+- **三条规则的分工**（都是按**域名**判定，不触发 DNS 解析，所以没有 `GEOIP,CN` 那个
+  「域名被解析成海外 IP、结果没直连」的坑，手册在 rules 那页专门提了这件事）：
+  - `GEOSITE,private,DIRECT`（131 条）：局域网 / 私有地址送去代理没有意义；
+  - `GEOSITE,category-ads-all,REJECT`（**190,384 条**）：**这条是换到 v2ray-rules-dat 之后
+    白拿的**——那份 `geosite.dat` 把 EasyList + EasyListChina + AdGuard DNS Filter +
+    Peter Lowe + Dan Pollock 全并进了这个类別（README 里写明），而 MetaCubeX 那份同名类別
+    只有 911 条。实测 `www.doubleclick.net` / `www.googleadservices.com` 都被 `REJECT`；
+  - `GEOSITE,cn,DIRECT`（111,177 条）：国内直连。
+  代价是只覆盖域名类请求，直连 IP 的请求仍会走代理（真在意就自己加一条 `GEOIP,CN,DIRECT`）。
 - **插入时会跟已有项对齐缩进**：同一个 YAML 序列里混缩进（比如已有组/规则是 4 空格、工具插的
   是 2 空格）会让整份配置**直接解析失败**——实测踩过，现在按已有项量出来的缩进走。
 
-#### 为什么四项 geox-url 都要换掉
+#### 为什么四项 geox-url 都要换掉，以及为什么 geosite/geoip 用 v2ray-rules-dat
 
 `GEOSITE` 规则要用 `GeoSite.dat`，而它的**默认下载源是 github.com**。实测（国内直连）：
 
@@ -191,8 +218,7 @@ dial tcp 20.205.243.166:443: connect: operation timed out
 
 注意这条错误是 **`mihomo -t` 抛的**——校验配置时内核就会去初始化 geosite。也就是说没有镜像时
 `sub set` 会被自己的校验挡回来（写完 → 校验失败 → 回滚），规则根本装不进去。换成 jsdelivr 镜像后
-实测 2.9 秒下完、`Finished initial GeoSite rule cn => DIRECT, records: 111021`，
-落地 `GeoSite.dat` 4.2 MB（放在内核目录里，跟 `geoip.metadb` 一样由内核自己维护）。
+实测 5.8 秒下完（11.1 MB）、`Finished initial GeoSite rule cn => DIRECT, records: 111177`。
 
 **另外三项（`geoip` / `mmdb` / `asn`）的默认源同样是 github.com**，不是 jsdelivr。
 内核 `DefaultRawConfig`（v1.19.31 源码）里四个 URL 全是
@@ -210,23 +236,53 @@ TCP 172.25.56.20:49676->185.199.109.133:443 (SYN_SENT)      # objects.githubuser
 **并发**刷 GeoSite / MMDB / ASN（`component/updater/update_geo.go` 的 `updateGeoDatabases()`），
 各走各的 `geox-url`。骨架现在只有 `GEOSITE` 规则 → 只有 geosite 被 enable，所以只换 geosite
 也不会马上出事；但用户按上面那段建议加一条 `GEOIP,CN` 之后，24 小时的 tick 就去撞 github 了。
-实测四个镜像都能下：`GeoSite.dat` 4.2 MB、`geoip.metadb` 8.5 MB、`ASN.mmdb` 12 MB
-（`IP-ASN,15169,DIRECT` 规则实测触发下载，6 秒完）——三项都在内核里真的被加载过（`mihomo -t`
-与启动日志无报错）。
+实测四个镜像都能下：`geosite.dat` 11.1 MB、`geoip.dat` 16.9 MB（`GEOIP,telegram` 触发，下完
+`records: 12`）、`geoip.metadb` 8.5 MB、`ASN.mmdb` 12.1 MB（`IP-ASN,15169,DIRECT` 规则实测触发
+下载，6 秒完）——四项都在内核里真的被加载过（`mihomo -t` 与启动日志无报错）。
+
+**为什么 `geosite` / `geoip` 指向 Loyalsoldier/v2ray-rules-dat**（而不是 MetaCubeX 那份）：
+
+| 对比项 | Loyalsoldier/v2ray-rules-dat | MetaCubeX/meta-rules-dat |
+|---|---|---|
+| `geosite.dat` | 11.08 MB | 4.24 MB |
+| `category-ads-all` | **190,384 条** | 911 条 |
+| `cn` / `geolocation-!cn` | 111,177 / 27,248 | 111,021 / 27,204 |
+| 本工具文档里那批类別（77 个） | 全在 | 全在 |
+| 独有类別 | `china-list` 110,433、`apple-cn` 165、`google-cn` 112、`tld-cn` 49、`icloud` 53、`steam@cn` 17、`category-games@cn` 38、`win-spy` 327、`win-update` 364 | `category-companies` 等同名类別条数略有差异 |
+
+两家都源自 `v2fly/domain-list-community`，所以类別名字一整套都对得上（我用 77 个类別逐个
+`mihomo -t` 验过，两边都是 77/77 全在）；差在**广告表大小**和 Loyalsoldier 自己加的那几类。
+骨架上那条 `GEOSITE,category-ads-all,REJECT` 就是图这个——用 MetaCubeX 那份它只有 911 条，
+拦不住什么；换成这份之后它才真算「广告拦截」，而且**零额外依赖、零额外下载**
+（就在同一个 11 MB 的 `geosite.dat` 里）。
+
+代价是首次下载大了一圈：`geosite.dat` 从 4.24 MB / 2.5 秒变成 11.08 MB / 5.8 秒，
+`geoip.dat` 换成一家的（16.9 MB，且与 MetaCubeX 那份**逐字节相同**——两边 `geoip.dat` 的
+sha256 都是 `f3370cf391831bb0…`，说明这份数据本来就是同一个产物）。缓存下来之后
+`mihomo -t` 实测 0.31 秒。
 
 `mmdb` 用的是 `geoip.metadb`（不是 `country.mmdb`）：内核默认那个 URL 指的就是这个文件，
-只换主机名不换东西。`asn` 那个文件（`GeoLite2-ASN.mmdb`）MetaCubeX/meta-rules-dat 不发，
-用手册示例里那个源。
+只换主机名不换东西；而且**只在把 `geodata-mode` 改回 `false` 时才轮到它**，留着是为了不回落
+内核默认那个 github URL。
+
+`asn` 那份 `GeoLite2-ASN.mmdb`：**MetaCubeX 是提供的**（它 release 分支里有，之前我们漏看了），
+而且手册 `geox-url` 示例里那个 `xishang0128/geoip` 源跟它**逐字节相同**（12,103,050 字节，
+sha256 都是 `7dcc428e82ef1e95…`，我把两份都下下来算过），但 MetaCubeX 那份更新更快
+（2026-09-21 08:21 vs 09-17），所以指 MetaCubeX、少一个第三方仓库。
 
 `geox-url` 节如果已经存在，工具**缺哪个子键补哪个、已有的一个字节不碰**；整节是流式写法
 （`geox-url: {…}`）时跳过并说一声。这一条是给老版本写的配置留的路：0.1.x 只覆盖过
-`geosite`，要是按「整节存在就整节跳过」处理，升级后那三项永远补不上——同一个链接再跑
-`sub set` 是直接 return 的，连补的这一步都到不了。
+`geosite`，要是按「整节存在就整节跳过」处理，升级后那三项永远补不上。
+
+**换源对老配置不生效（有意如此）**：已有的 `geosite: …` 不会被改写成新地址——工具的原则是
+「已有的值一律不碰」。所以从上一个版本升上来的配置会保留 MetaCubeX 那份 `geosite.dat`
+（广告表就还是 911 条）。想拿到上表那份 190k 的广告表，两个办法：把 `geox-url` 那一节删了再
+`sub set`（会按新源整节补全），或者自己把 `geosite` / `geoip` 两行改成上面的地址。
 
 **那老配置什么时候才会真被补上？** 同一个链接再跑一次 `sub set` 就会——这是「链接没变」
-那条路上唯一的写盘情形（下面详说）：只查缺的全局键，一个都没有就退回去走「只重拉节点」。
-反过来说，升级上来的配置不用换链接、不用 reset，随手 `mihomo-cli sub set <你那条链接>`
-就补齐了（没设过订阅、或者链接变了的时候也一样会补）。
+那条路上**唯一会写盘**的情形（下面详说）：把缺的全局键和缺的规则都补上。反过来说，
+升级上来的配置不用换链接、不用 reset，随手 `mihomo-cli sub set <你那条链接>` 就补齐了
+（没设过订阅、或者链接变了的时候也一样会补）。
 
 `节点选择` 这个名字不是随便挑的：`kernel.current_node()` 认它，所以 `status` 的「当前出口」
 能顺着 `节点选择 → 自动选择 → 具体节点` 一路穿透下去（延迟取叶子那个节点的）。
@@ -236,15 +292,27 @@ TCP 172.25.56.20:49676->185.199.109.133:443 (SYN_SENT)      # objects.githubuser
 换完链接拿到的还是旧链接那批节点。删完必须重启内核（见下），因为正在跑的内核早就把节点读进
 内存了，删文件对它没有任何影响。
 
-**链接没变**：先跑一遍 `_ensure_globals()` 看全局设置缺不缺。**一个都不缺**（绝大多数情况）
-就直接进刷新流程，`config.yaml` 一个字节都不改——所以 `sub set` 是幂等的：脚本里反复跑它
-不会把用户的配置越改越乱（备份目录里也不会堆一串没人看的备份）。
+**链接没变**：先跑一遍 `_ensure_globals()` 和 `_ensure_rules()`，看全局设置和规则缺不缺。
+**一个都不缺**（绝大多数情况）就直接进刷新流程，`config.yaml` 一个字节都不改——所以 `sub set`
+是幂等的：脚本里反复跑它不会把用户的配置越改越乱（备份目录里也不会堆一串没人看的备份）。
 
-**缺全局设置**（从 0.1.x 升级上来的配置就是这种）时走一次写盘：备份 → 写入 → `mihomo -t`
-→ 重启内核，拿它换掉「只重拉节点」——因为这几项（`external-controller` / `ipv6` / `geox-url`
-那几项）不重启内核不生效，而 `external-controller` 不生效意味着本工具自己的 `sub nodes` /
-`sub use` 全是废的。写一次就补齐，第二个 `sub set` 又回到“一个字节不改”那条路；订阅块
-（`proxy-providers` 里那个 `airport`）全程一个字节也没动。
+**缺件**（从老版本升级上来的配置就是这种：没有 `geodata-mode` / `external-controller` 那几项、
+rules 里也没 `private` / `category-ads-all`）时走一次写盘：备份 → 写入 → `mihomo -t` →
+重启内核，拿它换掉「只重拉节点」——因为这几项（`external-controller` / `geodata-mode` /
+`geox-url` 那几项）不重启内核不生效，而 `external-controller` 不生效意味着本工具自己的
+`sub nodes` / `sub use` 全是废的。写一次就补齐，第二个 `sub set` 又回到“一个字节不改”那条路；
+订阅块（`proxy-providers` 里那个 `airport`）全程一个字节也没动。
+
+实测（拿一份老配置：`geox-url` 是旧值 + rules 只有 `GEOSITE,cn,DIRECT` + `MATCH,节点选择`，
+同一个链接再跑 `sub set`）——只动了这两处，`geox-url` 旧值一个字节没变：
+
+```diff
+  2a3
+  > geodata-mode: true
+  46a47,48
+  >   - GEOSITE,private,DIRECT
+  >   - GEOSITE,category-ads-all,REJECT
+```
 
 ## 生效方式：重启内核，不是热重载
 
@@ -415,6 +483,28 @@ networksetup 还会让人以为工具动了系统设置。
 写法的配置照样清得干干净净）。
 
 ## 踩过的点
+
+- **`geox-url` 换了 `geoip` 但不写 `geodata-mode: true` = 白换**。内核默认 `geodata-mode:
+  false`，那时 `GEOIP` 规则读的是 mmdb（`geox-url.mmdb`），`geoip:` 那个 URL 根本没人用。
+  附带一个意外好处：`geodata-mode: true` 时 GEOIP 国家名**会被 `mihomo -t` 校验**（写错的
+  名字直接 `[GeoIP] failed to decode geodata file: GeoIP.dat … country code nosuchcountry`
+  → 校验失败 → 回滚），而 mmdb 模式下 `GEOIP,ZZTOP` 这种写错**居然能通过校验**。
+- **同名文件不等于同一份内容**。`geosite.dat` 这名字下至少有两份不同的东西：
+  `MetaCubeX/meta-rules-dat@release` 那份 4.24 MB、`Loyalsoldier/v2ray-rules-dat@release`
+  那份 11.08 MB（`cn` 111,021 vs 111,177、`category-ads-all` **911 vs 190,384**）。
+  两份都源自 `v2fly/domain-list-community`，类別名字对得上，但覆盖不一样——所以「换了源」
+  会静默改变分流结果。反过来 `geoip.dat` 两边 sha256 完全相同（`f3370cf3…`），那是同一产物。
+- **`1.19.31` 的 `geox-url` 默认源都是 github.com**，手册里 `geox-url` 那段 jsdelivr 地址是
+  示例值（这条上面写过了，但真容易记反）：实测 `GeoIP.dat` / `GeoIP.metadb` 都是去连
+  `github.com` 加一条卡在 `SYN_SENT` 的 `objects.githubusercontent.com`。
+- **rule-provider（`RULE-SET`）的下载走内核自己的路由**，跟 geodata 不一样：实测把节点全设成死的
+  时，日志是 `dial 节点选择 (match Match/) mihomo --> testingcf.jsdelivr.net:443 … connection
+  refused`，provider 没下来、`RULE-SET` **静默失效**，而 `mihomo -t` 照样 `test is successful`
+  （它不校验 provider）。想用它就得给 provider 写 `proxy: DIRECT`——实测加上之后只有死节点
+  也能把 `cn.mrs`（538484 字节）下全并命中。所以骨架用的是 `GEOSITE`、不引 rule-provider。
+- **`geo-auto-update` 每天刷的是「enable 的那几份」**：骨架上只有 `GEOSITE` 规则时只刷
+  `geosite.dat`（11.1 MB）；用户自己加一条 `GEOIP,CN` 之后 `geoip.dat`（16.9 MB）也跟着刷
+  ——四项 `geox-url` 一起写就是因为这个（迟早都要下，不如一开始就指向同一家）。
 
 - **`sub set` 会先自己拉一遍再写**（`_preflight()`），UA 用 `clash-verge/v2.4.7`（机场普遍按 UA
   发配置），并且**刻意不认 `http_proxy` / `https_proxy`**：设订阅时本机可能正因为代理还没配好

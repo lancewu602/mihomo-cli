@@ -50,14 +50,16 @@ nic [网卡名]            固定系统代理用哪张网卡（**仅 macOS**）�
 sub set <链接>           设置订阅链接（**只支持一个**）：没设过就写进 config.yaml 的 proxy-providers，
                          再补一份骨架（只在缺的时候补，你自己的组/规则/设置一律不碰）：
                          两个组 `节点选择`（select，默认选中自动组）+ `自动选择`（url-test）、
-                         一条分流规则 `GEOSITE,cn,DIRECT` + 兜底 `MATCH,节点选择`、以及
-                         八个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
+                         三条分流规则（`GEOSITE,private,DIRECT` / `GEOSITE,category-ads-all,REJECT` /
+                         `GEOSITE,cn,DIRECT`）+ 兜底 `MATCH,节点选择`、以及
+                         九个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
                          `external-controller` / `unified-delay` / `tcp-concurrent` /
-                         geodata 自动更新两项，以及四项 `geox-url` 换 jsdelivr 镜像、
+                         `geodata-mode: true` / geodata 自动更新两项，以及四项 `geox-url`：
+                         geosite / geoip 走 Loyalsoldier/v2ray-rules-dat，mmdb / asn 走 MetaCubeX、
                          `profile.store-selected`）；
                          链接变了就把旧的整块丢掉、新的全量接管，链接没变则一个字节都不改、
-                         只让内核重拉节点（唯一的例外：老配置里缺的全局设置会补上——只补缺的，
-                         写一次就安静）；设置前先自己拉一遍确认链接可用（--force 跳过）
+                         只让内核重拉节点（唯一的例外：老配置里缺的全局设置和规则会补上——
+                         只补缺的，写一次就安静）；设置前先自己拉一遍确认链接可用（--force 跳过）
 sub update               更新节点信息：让内核当场重拉（链接不变，不碰配置文件）
 sub show                 看当前订阅：链接、缓存文件、挂在哪个组、内核那边多少节点（默认动作）
 sub nodes [--delay]      列当前订阅的节点：**序号** / 名字 / 类型 / 延迟；`●` 标出当前出口，
@@ -99,7 +101,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 | 文档 | 什么时候看 |
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
-| [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/一条规则/geodata 设置是怎么来的 |
+| [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/三条规则（为何选 v2ray-rules-dat）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
 | [docs/lifecycle.md](docs/lifecycle.md) | 系统代理怎么开关（start/stop 顺带管）、网卡怎么选、两层之间那两条不变式 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
@@ -118,8 +120,9 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
   兜底 MATCH、那几项全局设置）；你已经写过的组、规则、设置一律不碰——全局设置里已有的
   **顶层键**不动，`geox-url` / `profile` 这种嵌套节则是**缺哪个子键补哪个**（升级前只写了
   `geox-url.geosite` 的配置，会在下次写配置时补上 `geoip` / `mmdb` / `asn`）。
-- 内核目录里的数据文件（`GeoSite.dat` 4.2 MB、`geoip.metadb` 8.1 MB 等）**由内核自己下载和维护**，
-  工具不装也不删它们；`GeoSite.dat` 在写完规则跑 `mihomo -t` 校验时就会下下来。
+- 内核目录里的数据文件（`GeoSite.dat` 11.1 MB、`geoip.dat` 16.9 MB、`geoip.metadb` 8.5 MB 等）
+  **由内核自己下载和维护**，工具不装也不删它们；`GeoSite.dat` 在写完规则跑 `mihomo -t` 校验时
+  就会下下来（实测 5.8 秒；有 `GEOIP` 规则时还会下 `geoip.dat`）。
 
 ## 安装
 
