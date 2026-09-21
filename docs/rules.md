@@ -136,6 +136,35 @@ path is not subpath of home directory or SAFE_PATHS: /Users/…/rules/direct.txt
 `rule` 会把三种异常状态说出来：**链接还没建**（跑 `rule init`）、**链接断开**（真身文件被删了）、
 **内核目录里是普通文件**（你自己放的，工具不动它）。
 
+### 必须用 `rule init` 吗
+
+不是必须——这个命令只是把「三个文件 + 内核目录里的链接 + config.yaml」一次做对而已，文件本身
+没有任何魔法：**内核只认 config.yaml 里那两处**（`rule-providers` 的声明、`rules` 里的
+`RULE-SET`）。所以两种替代写法都行：
+
+1. **手写 config.yaml，文件直接放内核目录**（连符号链接也省了）：
+
+   ```yaml
+   rule-providers:
+     my-direct: {type: file, behavior: domain, format: text, path: ./direct.txt}
+     my-proxy:  {type: file, behavior: domain, format: text, path: ./proxy.txt}
+     my-reject: {type: file, behavior: domain, format: text, path: ./reject.txt}
+   rules:
+     - RULE-SET,my-direct,DIRECT     # 这三条必须在最前面
+     - RULE-SET,my-proxy,节点选择
+     - RULE-SET,my-reject,REJECT
+     # …后面接你自己的/骨架的规则
+   ```
+
+   实测这样也能跑（`mihomo -t` 通过、三条都命中）。`mihomo-cli rule` 看现状时会认出来，
+   并且会在那一行标出 `已接（path: ./direct.txt）—（不是工具那份）`，不假装是自己接的。
+
+2. **连文件都不用**：直接往 `rules:` 里写 `DOMAIN-SUFFIX,…`（就是上面 ①）。域名只有几条时
+   这个最省事。
+
+`rule init` 多做的部分：建三个文件 + 建链接 + **备份 → `mihomo -t` 校验 → 不过回滚** + 内核在跑
+就顺手重启 + 可重复跑（幂等）。手写这些得自己来——尤其是**千万别忘了 `mihomo -t`**。
+
 ### reset 之后要两步接回来
 
 `mihomo-cli reset` 会把 `config.yaml` 清成最小骨架，`rule-providers` 那节和三条规则也一起没了
