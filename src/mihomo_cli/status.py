@@ -15,7 +15,6 @@ from .core import (
     can_check_listener,
     dim,
     listener,
-    note,
     ok,
     pad,
     proxy_port,
@@ -133,8 +132,6 @@ def cmd_status(args: argparse.Namespace) -> int:
             if args.service is not None
             else active_service(services)
         )
-        if svc is not None and args.service is None:
-            note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
         where = (
             "无活跃网卡"
             if svc is None
