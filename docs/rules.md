@@ -159,6 +159,14 @@ path is not subpath of home directory or SAFE_PATHS: /Users/…/rules/direct.txt
    实测这样也能跑（`mihomo -t` 通过、三条都命中）。`mihomo-cli rule` 看现状时会认出来，
    并且会在那一行标出 `已接（path: ./direct.txt）—（不是工具那份）`，不假装是自己接的。
 
+   **别把 `~` 写进 `path:`**——内核不展开它（`~` / `$HOME` / `${HOME}` 全是字面量，它只做
+   `filepath.Join(HomeDir, path)`），`~/.config/…` 会被拼成 `<内核目录>/~/.config/…`。最阴的是
+   `mihomo -t` **还报 successful**，只有运行时日志里一行
+   `initial rule provider … error: fswatch: watch /opt/homebrew/etc/mihomo/~/.config/… no such file`，
+   规则静默失效。想用绝对路径指向工具目录也行，但得配 `SAFE_PATHS=$HOME/.config/mihomo-cli/rules`
+   （实测可行）；对 brew services 起的内核而言那意味着改 launchd plist，而它会被
+   `brew services start` 覆盖——所以本工具选了符号链接这条路。
+
 2. **连文件都不用**：直接往 `rules:` 里写 `DOMAIN-SUFFIX,…`（就是上面 ①）。域名只有几条时
    这个最省事。
 
