@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from .core import (
     HOST,
@@ -46,6 +47,21 @@ def cmd_status(args: argparse.Namespace) -> int:
     pid = mihomo_pid()
     found = listener(port)
     names = {n for n, _ in found}
+
+    # 连通性探测是这屏里最贵的一步（穿代理发两次请求核对 unified-delay，实测 ~0.6s），
+    # 所以先丢到线程里跑，等下面把订阅/节点/日志都拼完再来收结果——行的顺序不变，
+    # 整体从"各步相加"变成"等最慢那一步"。
+    probe_pool = ThreadPoolExecutor(max_workers=1) if "mihomo" in names else None
+    probe_future = probe_pool.submit(probe, port) if probe_pool else None
+
+    def conn_line() -> None:
+        """连通性那行。探测在后台线程里，这里只收结果。"""
+        if probe_future is None:
+            return
+        good, info = probe_future.result()
+        assert probe_pool is not None
+        probe_pool.shutdown(wait=False)  # 活已经干完，这里只是回收线程
+        line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
 
     def line(label: str, value: str) -> None:
         print(f"  {pad(label, 12)} {value}")
@@ -158,9 +174,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             chain, delay = node
             lat = f"{delay}ms" if delay else dim("无延迟数据")
             line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
-        if "mihomo" in names:
-            good, info = probe(port)
-            line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
+        conn_line()
         return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
@@ -192,7 +206,5 @@ def cmd_status(args: argparse.Namespace) -> int:
         lat = f"{delay}ms" if delay else dim("无延迟数据")
         line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
 
-    if "mihomo" in names:
-        good, info = probe(port)
-        line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
+    conn_line()
     return 0

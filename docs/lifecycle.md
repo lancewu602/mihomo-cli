@@ -63,3 +63,9 @@ core → kernel → service → logs ─┐
 - 新增"会动系统状态"的命令时，想清楚它属于哪一层，顺序不变式有没有被绕过。
 - `proxy on` 的探测 + 回滚、`kernel stop` 的检查，这两处是安全网，别为了"少一次请求"删掉。
 - 组合命令里任何一步 `die` 都会中止后续步骤（内核保持原状），退出码沿用那一步的。
+- **拿服务状态别用 `brew services list`**：它把所有服务都查一遍，实测 1.8s；我们要的只是内核
+  这一个 job，`launchctl print gui/<uid>/homebrew.mxcl.mihomo` 0.01s（快 180 倍），
+  见 `service.brew_service_state()`（没有 launchctl 的怪环境才退回 brew 那条）。
+- `status` 里最贵的是穿代理的连通性探测（~0.6s，unified-delay 要发两次请求），它在
+  `status.py` 里是**另起线程**和其余信息并行跑的：加新的"慢探测"时优先想想能不能同样并行，
+  而不是让人等一串相加的时间。
