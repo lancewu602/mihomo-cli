@@ -11,9 +11,12 @@
     geodata      数据文件：geoip.metadb 这类实体的下载、校验、装进内核目录
     groups       策略组：列组、看选项、切节点、测速
     status       一屏状态（cmd_status）
+    compose      跨两层的命令：start / stop / restart 与 kernel / proxy 两个显式层
     cli          命令行入口：argparse、子命令表、异常兜底
 
-依赖方向大致是 core → kernel → 其余 → cli，没有循环 import。
+依赖方向是单向的：core → kernel → systemproxy → compose → cli，没有循环 import。
+compose 存在的理由：内核和系统代理各自单独动都有会出事的地方（先把代理指向死端口、
+或者代理还指着内核就把它停了），那两条顺序不变式就落在 compose 里，见 docs/lifecycle.md。
 
 入口有两个，都落到 `cli.main()`：
 

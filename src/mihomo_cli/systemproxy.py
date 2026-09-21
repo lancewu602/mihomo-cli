@@ -5,13 +5,24 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import time
 
-from .core import HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_port, run, warn
-from .kernel import ensure_kernel_up, probe, service_manager, stop_kernel
+from .core import (
+    HOST,
+    IS_MACOS,
+    STATE_FILE,
+    bad,
+    die,
+    dim,
+    listener,
+    ok,
+    proxy_port,
+    run,
+    warn,
+)
+from .kernel import probe
 
 # 开代理时写入的绕过列表：这些地址根本不发给 mihomo（跟顺序表第 1 条 LocalAreaNetwork 对齐）。
 # 好处：内网请求少一跳，mihomo 重启那几秒里 NAS / 路由器也不会跟着断。
@@ -283,38 +294,54 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
         )
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    """开系统代理；内核没跑就先把它拉起来。"""
-    if not IS_MACOS:
-        port = proxy_port()
-        already = ensure_kernel_up(port)
-        mgr = service_manager()
-        print(
-            f"{ok('✓')} 内核"
-            + ("本来就在跑，没动它" if already else "服务已启动")
-            + dim(f"（{mgr[1] if mgr else '手工'}，{HOST}:{port}）")
+def open_nics() -> list[str]:
+    """哪些网卡的系统代理现在真开着（macOS）。"""
+    return [
+        s["name"] for s in list_services() if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)
+    ]
+
+
+def proxies_pointing_here() -> list[str]:
+    """哪些网卡的系统代理正指着本工具的端口。
+
+    用来拦住"内核停了但那几张网卡还指着它"——那种状态下停内核等于整机断网。"""
+    mine = f"{HOST}:{proxy_port()}"
+    out = []
+    for s in list_services():
+        for kind in KINDS:
+            p = get_proxy(s["name"], kind)
+            if p["enabled"] and f"{p['server']}:{p['port']}" == mine:
+                out.append(s["name"])
+                break
+    return out
+
+
+def verify_open_nics(port: int) -> None:
+    """重启内核之后，对有开着代理的网卡真发一个请求验证（只打印，不改设置）。"""
+    opened = open_nics()
+    if not opened:
+        print(dim("  系统代理没开着；要让流量走内核就 mihomo-cli start"))
+        return
+    good, info = probe(port)
+    print(f"    连通性 {ok('✓ ' + info) if good else bad('✗ ' + info)}" + dim(f"  （{opened[0]}）"))
+    if not good:
+        print(dim("    看节点：mihomo-cli status / mihomo-cli sub nodes"))
+
+
+def proxy_on(service: str) -> int:
+    """在指定网卡上开系统代理。**不负责拉内核**——内核必须已经在监听。
+
+    两道护栏：端口上没有 mihomo 就拒绝（否则等于把整机指向死端口）；开完真发一个请求，
+    不通就把设置还原回去，不把人丢在断网状态里。"""
+    port = proxy_port()
+    found = listener(port)
+    if "mihomo" not in {n for n, _ in found}:
+        who = "、".join(f"{n}(PID {p})" for n, p in found) or "没有进程在听"
+        die(
+            f"{HOST}:{port} 上没有 mihomo 在监听（{who}）。\n"
+            f"  拒绝把系统代理指过去——那等于整机断网。\n"
+            f"  先起内核：mihomo-cli kernel start（想一步到位就用 mihomo-cli start）"
         )
-        print(dim("  系统代理是 macOS 专有（networksetup）；Linux 上到这里就够了"))
-        return 0
-
-    require_macos("start")
-    svc = (
-        match_service(args.service, list_services())
-        if args.service is not None
-        else active_service()
-    )
-    if svc is None:  # 没活跃网卡就不猜，直接让用户说清楚
-        die(no_active_nic_error())
-    if args.service is None:
-        note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
-    service, port = svc["name"], proxy_port()
-
-    if not svc["enabled"]:
-        die(f"网卡 {service!r} 是停用状态，先在「系统设置 → 网络」里启用它")
-
-    # 内核没起来就拉起来（端口被别的进程占着则直接失败）。
-    # 绝不能把系统代理指向一个没在监听的端口——那等于整台机器断网。
-    ensure_kernel_up(port)
 
     save_original_state(service)  # 先存档，才有得还原
     set_bypass(service, BYPASS)  # 先设绕过，再开代理，避免窗口期漏出去
@@ -376,35 +403,3 @@ def teardown(service: str) -> str:
 
     forget_state(service)
     return "；".join(notes)
-
-
-def cmd_stop(args: argparse.Namespace) -> int:
-    """关系统代理（macOS）并停掉内核服务。
-
-    顺序不能反：先把系统代理摘干净，再停内核。反过来的话，停内核那几秒里"""
-    code = 0
-    if IS_MACOS:
-        targets, why = resolve_stop_targets(args.service)
-        if why:
-            note(why)
-        if not targets:  # 没记录也没活跃网卡：本来就是关着的，不算失败
-            print(dim("没有需要关闭的网卡（也没有 start 记录）"))
-        for svc in targets:
-            service = svc["name"]
-            restored = teardown(service)
-            print(f"{ok('✓')} 系统代理已关闭  {dim(f'({service})')}")
-            for kind in KINDS:
-                mark = bad("on") if get_proxy(service, kind)["enabled"] else ok("off")
-                print(f"    {kind:<5} {mark}")
-            print(dim(f"    {restored}"))
-        if len(targets) > 1:
-            print(dim(f"    共关闭 {len(targets)} 张网卡"))
-    elif args.service:
-        die("网卡名是 macOS 的说法（networksetup）；Linux 上直接 mihomo-cli stop 就行")
-    else:
-        print(dim("系统代理是 macOS 专有（networksetup），这里只停内核服务"))
-
-    # 两端一致：stop 就是把内核也停了
-    if not stop_kernel():
-        code = 1
-    return code

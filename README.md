@@ -26,9 +26,13 @@
 ## 命令
 
 ```
+kernel start|stop|restart   内核层（跨平台）：只动内核服务，不碰系统代理
+kernel stop --force        系统代理还指着内核时也照停（那些网卡上的应用会断网）
+proxy on|off|show [网卡名]  系统代理层（仅 macOS）：只动 networksetup 的开关
+start [网卡名]              = kernel start + proxy on（Linux 上只有内核那半）
+stop [网卡名]               = proxy off 然后 kernel stop（顺序不能反）
+
 nics [网卡名]            列网卡（macOS 网络服务 / Linux 接口与路由）
-start [网卡名]           内核没跑就先交给服务管理器拉起，等端口就绪，再开系统代理
-stop [网卡名]            先关系统代理，再停内核服务
 restart [--keep-log]     重启内核服务让新配置生效；默认顺手清空日志
 status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性（默认动作）
 
@@ -63,6 +67,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
+| [docs/lifecycle.md](docs/lifecycle.md) | 内核层与系统代理层怎么分、`start`/`stop` 的顺序不变式 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，

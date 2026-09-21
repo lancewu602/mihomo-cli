@@ -4,13 +4,15 @@
 包内入口（`mihomo_cli/cli.py`）：只管参数解析、子命令表和异常兜底，活都在各模块里。
 两个等价入口：`mihomo-cli`（装包后）/ `python3 -m mihomo_cli`（不装包）。
 
-不带参数 = status（只读）。macOS 用 networksetup 开关系统代理；Linux 按服务端处理：
-start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
+不带参数 = status（只读）。内核和系统代理是两层，既能分开动，也能一条命令一起做：
+
+    kernel start|stop|restart     内核层（跨平台）：只碰内核服务，不动系统代理
+    proxy  on|off|show            系统代理层（仅 macOS）：只碰 networksetup 的开关
+    start [网卡名]                = kernel start + proxy on（Linux 上只有内核那半）
+    stop  [网卡名]                = proxy off 然后 kernel stop（顺序不能反）
+    restart [--keep-log]          = kernel restart（让新配置生效）；默认顺手清空日志
 
     nics [网卡名]     列网卡（macOS 网络服务 / Linux 接口与路由）
-    start [网卡名]    内核没跑先拉起，再开系统代理（Linux 只启内核服务）
-    stop [网卡名]     先关系统代理，再停内核服务
-    restart [--keep-log]  重启内核服务（让新配置生效）；默认顺手清空日志
     status [网卡名]   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
     logs   [--truncate]  内核日志在哪、多大；--truncate 清空
     group  [组名] [编号|选项 | --test]  策略组：列组 / 看选项 / 切换 / 测速（选项可报编号）
@@ -34,15 +36,15 @@ import argparse
 import os
 import sys
 
+from .compose import cmd_kernel, cmd_proxy, cmd_restart, cmd_start, cmd_stop
 from .core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .geodata import FILE_NAMES, MIRRORS, cmd_geodata
 from .groups import cmd_group
-from .kernel import cmd_logs, cmd_restart
+from .kernel import cmd_logs
 from .nics import cmd_nics
 from .rules import cmd_rules
 from .status import cmd_status
 from .subs import cmd_sub
-from .systemproxy import cmd_start, cmd_stop
 
 # ─────────────────────────── 入口 ───────────────────────────
 
@@ -50,19 +52,31 @@ SUBCOMMANDS = {
     "nics": ("列网卡（macOS 网络服务 / Linux 接口与路由）", cmd_nics),
     "geodata": ("geodata 数据文件：list / download / apply", cmd_geodata),
     "group": ("策略组：列组 / 看选项 / 切换 / 测速", cmd_group),
+    "kernel": ("内核层：start / stop / restart（不碰系统代理）", cmd_kernel),
     "logs": ("看内核日志在哪、多大；--truncate 清空", cmd_logs),
+    "proxy": ("系统代理层：on / off / show（macOS）", cmd_proxy),
     "rules": ("规则树：sync 同步片段 / diff 对比 / apply 落地 / rollback 回滚", cmd_rules),
     "sub": ("订阅：add 加 / list 列 / nodes 看节点 / update 刷在用的 / rm 删", cmd_sub),
-    "start": ("内核没跑先拉起，再开系统代理（Linux 只启内核服务）", cmd_start),
-    "stop": ("先关系统代理，再停内核服务", cmd_stop),
-    "restart": ("重启内核服务（让新配置生效）；顺手清空日志", cmd_restart),
+    "start": ("= kernel start + proxy on（Linux 只启内核服务）", cmd_start),
+    "stop": ("= proxy off + kernel stop（顺序不能反）", cmd_stop),
+    "restart": ("= kernel restart（让新配置生效）；顺手清空日志", cmd_restart),
     "status": ("查看当前状态（默认）", cmd_status),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics", "subs": "sub"}
 
 # 这些子命令不收"网卡名"这个位置参数
-NO_SERVICE_ARG = {cmd_nics, cmd_rules, cmd_sub, cmd_restart, cmd_geodata, cmd_logs, cmd_group}
+NO_SERVICE_ARG = {
+    cmd_nics,
+    cmd_rules,
+    cmd_sub,
+    cmd_restart,
+    cmd_geodata,
+    cmd_logs,
+    cmd_group,
+    cmd_kernel,
+    cmd_proxy,  # 它的每个动作自带 网卡名（放在动作后面）
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,7 +120,7 @@ def _main(argv: list[str] | None = None) -> int:
                 nargs="?",
                 default=None,
                 metavar="网卡名",
-                help="网卡名；不传时 start 用活跃那张，stop 关掉之前 start 过的",
+                help="网卡名（macOS 的系统代理层用；Linux 上这一层不存在）",
             )
         if fn is cmd_rules:
             rsub = p.add_subparsers(dest="rules_action")
@@ -150,6 +164,29 @@ def _main(argv: list[str] | None = None) -> int:
                 help="切到哪个：选项编号（看 group <组名> 那列）或名字的一段",
             )
             p.add_argument("--test", action="store_true", help="触发测速，按延迟排序")
+        if fn is cmd_kernel:
+            ksub = p.add_subparsers(dest="kernel_action")
+            ksub.add_parser("start", help="没在跑就交给服务管理器拉起，等端口就绪")
+            ks = ksub.add_parser("stop", help="停内核服务（系统代理还指着它时会拒绝）")
+            ks.add_argument(
+                "--force",
+                action="store_true",
+                help="明知系统代理还指着它也照停（那些网卡上的应用会断网）",
+            )
+            kr = ksub.add_parser("restart", help="重启内核服务，让新配置立刻生效")
+            kr.add_argument(
+                "--keep-log", action="store_true", help="保留旧日志（默认重启前清空，免得越滚越大）"
+            )
+        if fn is cmd_proxy:
+            psub = p.add_subparsers(dest="proxy_action")
+            # 网卡名放在动作后面（proxy on "Wi-Fi"）：动作才是这个命令的动词，
+            # 而且动作的位置不能变——通用位置参数会排在子命令前面，读起来别扭
+            ps = psub.add_parser("show", help="看各网卡的系统代理现状（默认）")
+            ps.add_argument("name", nargs="?", metavar="网卡名", help="只看这张网卡（不写=列全部）")
+            po = psub.add_parser("on", help="开系统代理（要求内核已在监听）")
+            po.add_argument("name", nargs="?", metavar="网卡名", help="默认用当前活跃那张")
+            pf = psub.add_parser("off", help="关系统代理，并把原设置还原回去")
+            pf.add_argument("name", nargs="?", metavar="网卡名", help="默认关掉之前 start 过的")
         if fn is cmd_restart:
             p.add_argument(
                 "--keep-log", action="store_true", help="保留旧日志（默认重启前清空，免得越滚越大）"

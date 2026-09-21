@@ -20,7 +20,6 @@ from .core import (
     SERVICE_HINT,
     TEST_URL,
     api,
-    bad,
     can_check_listener,
     die,
     dim,
@@ -321,8 +320,25 @@ def stop_kernel() -> bool:
     return True
 
 
-def cmd_restart(args: argparse.Namespace) -> int:
-    """重启内核服务：让磁盘上的配置立刻生效（rules apply / sub add 之后常用）。"""
+def kernel_start() -> int:
+    """只保证内核在跑（**不碰系统代理**）。已经跑着就不动它。
+
+    端口被别的进程占着、或本机缺 lsof/ss 说不清是谁在听，都会由 ensure_kernel_up 拒绝。"""
+    port = proxy_port()
+    already = ensure_kernel_up(port)
+    mgr = service_manager()
+    print(
+        f"{ok('✓')} 内核"
+        + ("本来就在跑，没动它" if already else "服务已启动")
+        + dim(f"（{mgr[1] if mgr else '手工'}，{HOST}:{port}）")
+    )
+    return 0
+
+
+def restart_kernel(keep_log: bool = False) -> int:
+    """重启内核服务：让磁盘上的配置立刻生效（rules apply / sub add 之后常用）。
+
+    只管内核：系统代理的开关不受重启影响（端口没变），重启后的连通性验证在 compose 里做。"""
     mgr = service_manager()
     if mgr is None:
         die(f"本机没找到 brew 或 systemd，不知道该让谁重启内核。\n  手工来：{RESTART_HINT}")
@@ -330,7 +346,7 @@ def cmd_restart(args: argparse.Namespace) -> int:
     old = mihomo_pid()
     state, label = service_status()
     print(dim(f"内核服务  {label}（当前 {state or '未知'}）" + (f"，PID {old}" if old else "")))
-    if not getattr(args, "keep_log", False):
+    if not keep_log:
         # 先清再启：新起的启动日志留得住（配置错误就在那几行里）；想留旧日志就 --keep-log
         print(dim(f"· {truncate_log()}"))
     good, msg = service_ctl("restart")
@@ -341,28 +357,6 @@ def cmd_restart(args: argparse.Namespace) -> int:
         die(f"重启后 {HOST}:{port} 一直没监听。\n  看日志：{log}")
     pid = mihomo_pid() or "?"
     print(f"{ok('✓')} 内核已重启  {dim(f'（{HOST}:{port} 就绪，PID {pid}）')}")
-
-    if not IS_MACOS:
-        return 0
-    # 函数内 import：systemproxy 在模块级 import 本模块（start/stop 要 ensure_kernel_up），
-    # 这里反过来只能放到函数里，否则两个模块在 import 阶段互相等对方初始化。
-    from systemproxy import KINDS, get_proxy, list_services
-
-    # 系统代理的开关不受重启影响（端口没变），但重启就是为了让它立刻生效，
-    # 所以带者开着代理的网卡真发一个请求验证一下
-    opened = [
-        s["name"] for s in list_services() if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)
-    ]
-    if not opened:
-        print(dim("  系统代理没开着；要让流量走内核就 mihomo-cli start"))
-        return 0
-    good_probe, info = probe(port)
-    print(
-        f"    连通性 {ok('✓ ' + info) if good_probe else bad('✗ ' + info)}"
-        + dim(f"  （{opened[0]}）")
-    )
-    if not good_probe:
-        print(dim("    看节点：mihomo-cli status / mihomo-cli sub nodes"))
     return 0
 
 

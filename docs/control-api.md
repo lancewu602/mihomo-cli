@@ -38,8 +38,8 @@
 | `src/mihomo_cli/core.py:326` `reload_config()` | `PUT /configs?force=true` | rules / geodata / sub 改完配置后热重载 |
 | `src/mihomo_cli/core.py:355` `controller_put()` | 任意 PUT | 写接口的统一封装（拿状态码，不解析 body） |
 | `src/mihomo_cli/status.py:145` | `GET /version` | 判断控制接口可用 |
-| `src/mihomo_cli/kernel.py:62` / `:66` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
-| `src/mihomo_cli/kernel.py:100` / `:92` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
+| `src/mihomo_cli/kernel.py:61` / `:83` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
+| `src/mihomo_cli/kernel.py:99` / `:109` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
 | `src/mihomo_cli/groups.py:30` | `GET /proxies` | 列策略组 |
 | `src/mihomo_cli/groups.py:152` | `PUT /proxies/{名}` | `group <组> <编号>` 切节点 |
 | `src/mihomo_cli/groups.py:107` / `:173` | `GET /proxies/{名}/delay` | 逐个节点测速 |

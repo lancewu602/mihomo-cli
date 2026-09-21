@@ -7,6 +7,7 @@
 |---|---|
 | [control-api.md](control-api.md) | 要调 mihomo 控制接口、或改 status / group / sub 的取数逻辑 |
 | [packaging.md](packaging.md) | 要构建二进制、改安装方式、加模块、动 `pyproject.toml` |
+| [lifecycle.md](lifecycle.md) | 动 `start` / `stop` / `kernel` / `proxy`（内核层与系统代理层的分工与顺序不变式） |
 
 ## 分发
 
