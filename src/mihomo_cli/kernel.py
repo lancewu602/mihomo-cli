@@ -303,7 +303,8 @@ def cmd_restart(args: argparse.Namespace) -> int:
     if not wait_kernel(port, old_pid=old):
         log = "brew services info mihomo" if mgr[0] == "brew" else "journalctl -u mihomo -n 50"
         die(f"重启后 {HOST}:{port} 一直没监听。\n  看日志：{log}")
-    print(f"{ok('✓')} 内核已重启  {dim(f'（{HOST}:{port} 就绪，PID {mihomo_pid() or '?'}）')}")
+    pid = mihomo_pid() or "?"
+    print(f"{ok('✓')} 内核已重启  {dim(f'（{HOST}:{port} 就绪，PID {pid}）')}")
 
     if not IS_MACOS:
         return 0
