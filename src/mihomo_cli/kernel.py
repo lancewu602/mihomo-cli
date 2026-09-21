@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .core import (
     HOST,
+    IS_MACOS,
     PROBE_TIMEOUT,
     SERVICE_NAME,
     TEST_URL,
@@ -25,23 +26,39 @@ from .core import (
 
 # ─────────────────────────── 内核状态查询 ───────────────────────────
 
+PROCESS_NAME = "mihomo"  # 内核可执行文件的名字（服务名 SERVICE_NAME 通常同名，但这是两件事）
+
+
+def _pid_from_pgrep() -> str | None:
+    """问 pgrep（macOS 的正路：进程名精确匹配走 libproc）。"""
+    p = run("pgrep", "-x", PROCESS_NAME)
+    return p.stdout.split()[0] if p.returncode == 0 and p.stdout.split() else None
+
+
+def _pid_from_proc() -> str | None:
+    """扫 /proc（Linux 的正路）：/proc/<pid>/comm 精确等于进程名。"""
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:  # 没挂 /proc 的怪容器
+        return None
+    for d in entries:
+        if not d.name.isdigit():
+            continue
+        try:
+            if (d / "comm").read_text(errors="replace").strip() == PROCESS_NAME:
+                return d.name
+        except OSError:  # 扫的过程中进程退了
+            continue
+    return None
+
 
 def mihomo_pid() -> str | None:
-    """内核进程的 PID。"""
-    if shutil.which("pgrep"):
-        p = run("pgrep", "-x", "mihomo")
-        if p.returncode == 0 and p.stdout.split():
-            return p.stdout.split()[0]
-    if Path("/proc").is_dir():  # Linux 回退
-        for d in Path("/proc").iterdir():
-            if not d.name.isdigit():
-                continue
-            try:
-                if (d / "comm").read_text(errors="replace").strip() == "mihomo":
-                    return d.name
-            except OSError:
-                continue
-    return None
+    """内核进程的 PID：各平台用自己最直接的方式读，没有就 None。
+
+    macOS 没有 /proc，只能问 pgrep；Linux 上 pgrep 本身就是 /proc 的包装，直接读 /proc
+    少起一个子进程，容器里也不必装 procps（两条路语义一致：都是拿进程名 comm 精确比）。
+    """
+    return _pid_from_pgrep() if IS_MACOS else _pid_from_proc()
 
 
 GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
@@ -149,6 +166,9 @@ def probe(port: int) -> tuple[bool, str]:
 # 启停内核服务是系统原生命令的事（brew services / systemctl），本工具不再代劳；
 # 这里只回答 status 要显示的两个问题：谁在管、服务现在是不是在跑。
 #
+# 两个平台各问自己的管理器，问法不通用：macOS 是 launchd 的 job，Linux 是 systemd 的 unit。
+# 下面这段 brew / launchctl 的代码默认只在 macOS 上走到（见 core.service_manager()）。
+#
 # 注意别为了拿状态去跑 `brew services list`（1.8s，它把**所有**服务都查一遍再格式化）；
 # 我们要的只是内核这一个 job，launchctl 一问就有（0.01s，实测快 180 倍）。
 
@@ -179,6 +199,7 @@ def _brew_state_from_list() -> str:
 def brew_service_state() -> str:
     """只问内核这一个 job 的状态，返回 running / stopped / none / error。
 
+    只在 macOS 上调（Linux 走 systemd，见 service_status()）。
     为什么不直接 `brew services list`：它把**所有**服务都查一遍并格式化，实测 1.8s；而我们要的
     信息 launchctl 一问就有，实测 0.01s（快 180 倍）。语义对齐 brew 的说法：
 
@@ -201,18 +222,24 @@ def brew_service_state() -> str:
 
 
 def service_status() -> tuple[str, str]:
-    """内核服务的状态：返回 (状态, 谁管的)。"""
+    """内核服务的状态：返回 (状态, 谁管的)。
+
+    先分平台，各平台问自己的服务管理器（问法不通用：launchd 是 job，systemd 是 unit）。
+    本机没有对应的管理器（容器里常见）返回 ("", "")，调用方显示"本机没找到 brew 或 systemd"。
+    """
     mgr = service_manager()
     if mgr is None:
         return "", ""
     kind, label = mgr
-    if kind == "brew":
+    if kind == "brew":  # macOS
         state = brew_service_state()
         if state == "running":
             return "running", label
         if state in ("stopped", "none"):
             return "stopped", label
         return state, label  # error / unknown 原样透出去，别吞
+
+    # Linux：systemd 的 unit
     p = run("systemctl", "is-active", SERVICE_NAME)
     state = p.stdout.strip() or "unknown"
     if state == "active":

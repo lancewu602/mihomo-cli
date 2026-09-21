@@ -22,6 +22,7 @@ from .core import (
     dim,
     listener,
     ok,
+    port_bound,
     proxy_port,
     run,
     warn,
@@ -136,7 +137,7 @@ def no_active_nic_error() -> str:
     return (
         "当前没有活跃网卡（没有默认路由），不知道该给哪张网卡开代理。\n"
         f"  可用的有：{'、'.join(s['name'] for s in nics)}\n"
-        '  也可以直接指定：mihomo-cli proxy on "USB 10/100 LAN"'
+        '  也可以直接指定：mihomo-cli proxy start "USB 10/100 LAN"'
     )
 
 
@@ -257,7 +258,7 @@ def write_state(data: dict) -> None:
 
 
 def save_original_state(service: str) -> None:
-    """存下该网卡在 proxy on 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
+    """存下该网卡在 proxy start 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
     data = load_state()
     if "bypass" in data:  # 早期版本的扁平格式，认不出来，丢掉重记
         data = {}
@@ -410,10 +411,18 @@ def proxy_on(service: str) -> int:
     found = listener(port)
     if "mihomo" not in {n for n, _ in found}:
         who = "、".join(f"{n}(PID {p})" for n, p in found) or "没有进程在听"
+        # 认不出主人 ≠ 没人监听：内核以 root 跑时（macOS 的 sudo brew services / Linux 的
+        # systemd）非 root 看不到它，这时候得告诉用户去哪确认，别只说“没有进程在听”。
+        blind = (
+            f"\n  端口上确实有人在监听，只是看不到是哪个进程（内核以 root 跑就是这样）；"
+            f"\n  自己确认：sudo lsof -nP -iTCP:{port} -sTCP:LISTEN"
+            if not found and port_bound(port)
+            else ""
+        )
         die(
             f"{HOST}:{port} 上没有 mihomo 在监听（{who}）。\n"
             f"  拒绝把系统代理指过去——那等于整机断网。\n"
-            f"  先起内核：{SERVICE_HINT}"
+            f"  先起内核：{SERVICE_HINT}{blind}"
         )
 
     save_original_state(service)  # 先存档，才有得还原
@@ -435,7 +444,7 @@ def proxy_on(service: str) -> int:
         restored = teardown(service)
         print(warn("⚠ 探测没通，已回滚系统代理（内核未受影响）"))
         print(dim(f"    {restored}"))
-        print(dim("    先 mihomo-cli status 看节点是否可用，换好节点再 start"))
+        print(dim("    先 mihomo-cli status 看节点是否可用，换好节点再 mihomo-cli proxy start"))
         return 1
 
     print(f"    连通性 {ok('✓ ' + info)}")
@@ -443,7 +452,7 @@ def proxy_on(service: str) -> int:
 
 
 def teardown(service: str) -> str:
-    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。proxy off 和回滚共用。
+    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。proxy stop 和回滚共用。
 
     顺序要紧：networksetup 写地址会顺手把代理打开，所以必须先写地址、再关开关。"""
     had_state, original, servers = load_original_state(service)

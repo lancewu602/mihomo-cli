@@ -100,13 +100,16 @@ SERVICE_NAME = "mihomo"  # brew services / systemd 里那个服务（unit）名
 
 
 def service_manager() -> tuple[str, str] | None:
-    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。"""
-    if IS_MACOS and shutil.which("brew"):
-        return "brew", "brew services"
+    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。
+
+    先分平台，再问该平台的服务管理器在不在：macOS 只有 brew services，Linux 只有 systemd。
+    不给 Linux 留 brew 分支：brew services 在 Linux 上包的就是 systemd（`~/.config/systemd/user/`），
+    它真能干活时 systemd 分支必然先命中；systemd 不在时 brew services 自己会报错退出。
+    """
+    if IS_MACOS:
+        return ("brew", "brew services") if shutil.which("brew") else None
     if shutil.which("systemctl") and Path("/run/systemd/system").is_dir():
         return "systemd", "systemd"
-    if shutil.which("brew"):
-        return "brew", "brew services"
     return None
 
 
@@ -212,16 +215,84 @@ def http_get(
 
 
 def listener(port: int) -> list[tuple[str, str]]:
-    """返回监听该端口的 [(命令名, PID)]。拿不准时返回空列表。"""
-    found: list[tuple[str, str]] = []
-    if shutil.which("lsof"):
-        p = run("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN")
-        for line in p.stdout.splitlines()[1:]:  # 跳过表头
-            parts = line.split()
-            if len(parts) >= 2 and parts[1].isdigit():
-                found.append((parts[0], parts[1]))
-        return found
+    """返回监听该端口的 [(命令名, PID)]。看不到主人、或工具没装时返回空列表。
 
+    先分平台：macOS 只有 lsof（没有 ss）；Linux 上 ss 属 iproute2，比 lsof 更常见也更轻
+    （一次 netlink dump，不扫 /proc）。首选那个不在，就退回另一个；两个都不在返回空列表。
+
+    **空列表不等于没人监听**：socket→pid 的映射要权限，非 root 拿不到别的 uid 的（实测 macOS
+    root 的 cupsd 在 631、Linux root 起的内核，非 root 两种工具都认不出主人）。要回答“端口上
+    到底有没有人听”用 port_bound()。
+    """
+    probes = (_listeners_lsof, _listeners_ss) if IS_MACOS else (_listeners_ss, _listeners_lsof)
+    for probe in probes:
+        if (found := probe(port)) is not None:
+            return found
+    return []
+
+
+def port_bound(port: int) -> bool:
+    """端口上到底有没有人在监听——**不要求知道是谁**，也不需要任何权限。
+
+    为什么要单独一条：非 root 看不到别的 uid 的监听者，而内核对文档推荐的两套装法恰恰都是 root
+    起的（Linux 的 `sudo systemctl start mihomo`、macOS 的 `sudo brew services`）。把“看不到”
+    当成“没在听”，status 就会误报“无监听”、还跟着跳过连通性探测。
+
+    各平台用各自最笨但最可靠的原生读法（都直接读内核的 socket 表）：
+
+      macOS  `netstat -an -p tcp`，本地地址形如 127.0.0.1.631 / ::1.631
+      Linux  `/proc/net/tcp{,6}`，状态列 0A 就是 LISTEN
+    """
+    return _port_bound_netstat(port) if IS_MACOS else _port_bound_proc(port)
+
+
+def _port_bound_netstat(port: int) -> bool:
+    """macOS：netstat 的 LISTEN 行里有没有这个端口。"""
+    p = run("netstat", "-an", "-p", "tcp")
+    for line in p.stdout.splitlines():
+        parts = line.split()
+        # tcp4 0 0 127.0.0.1.7890 *.* LISTEN \u2014\u2014 本地地址是第 4 列，端口是最后一段数字
+        if len(parts) >= 4 and parts[-1] == "LISTEN" and parts[3].rsplit(".", 1)[-1] == str(port):
+            return True
+    return False
+
+
+def _port_bound_proc(port: int) -> bool:
+    """Linux：/proc/net/tcp{,6} 里本地端口匹配且状态是 0A（LISTEN）。
+
+    /proc/net/tcp 的列：sl local rem st ...，地址是十六进制（端口大写补足 4 位）。
+    """
+    want = f"{port:04X}"
+    for name in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(name).read_text(errors="replace").splitlines()
+        except OSError:  # 没挂 /proc 的怪容器
+            continue
+        for line in lines[1:]:  # 跳过表头
+            cols = line.split()
+            if len(cols) > 3 and cols[3] == "0A" and cols[1].rsplit(":", 1)[-1] == want:
+                return True
+    return False
+
+
+def _listeners_lsof(port: int) -> list[tuple[str, str]] | None:
+    """lsof 版的监听者。没装 lsof 返回 None（区别于“装了但没有监听者”的空列表）。"""
+    if not shutil.which("lsof"):
+        return None
+    found: list[tuple[str, str]] = []
+    p = run("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN")
+    for line in p.stdout.splitlines()[1:]:  # 跳过表头
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            found.append((parts[0], parts[1]))
+    return found
+
+
+def _listeners_ss(port: int) -> list[tuple[str, str]] | None:
+    """ss 版的监听者。没装 ss 返回 None。"""
+    if not shutil.which("ss"):
+        return None
+    found: list[tuple[str, str]] = []
     # ss -ltnp 输出示例：
     #   LISTEN 0 4096 127.0.0.1:7890 0.0.0.0:* users:(("mihomo",pid=123,fd=5))
     p = run("ss", "-ltnp")
@@ -235,7 +306,7 @@ def listener(port: int) -> list[tuple[str, str]]:
 
 
 def can_check_listener() -> bool:
-    """本机有没有工具能查“谁在监听端口”（lsof 或 ss）。"""
+    """本机有没有工具能查“谁在监听端口”（首选的那个不在，还有另一个兜底）。"""
     return bool(shutil.which("lsof") or shutil.which("ss"))
 
 

@@ -26,14 +26,15 @@
 ## 命令
 
 ```
-proxy on|off|show [网卡名]
-                         系统代理那一层：on 开、off 摘（并把绕过列表/原地址还原）、show 看现状
+proxy start|stop|status [网卡名]
+                         系统代理那一层：start 开、stop 摘（并把绕过列表/原地址还原）、status 看现状
                          （**仅 macOS**，Linux 下这个命令不注册）
                          内核自己起：brew services start mihomo / sudo systemctl start mihomo
-                         show 默认只看活跃那张网卡，--all 列全部
+                         status 默认只看活跃那张网卡，--all 列全部
+                         旧写法 proxy on / off 仍能用（别名），proxy show 改叫 proxy status
 
-nics [网卡名]            列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
-status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 订阅 / 出口 / 连通性（默认动作）
+nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
+status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 订阅 / 出口 / 连通性（默认动作）
 
 sub list                 列出订阅：节点数、刷新间隔、挂在哪些组、本地缓存
 sub add <链接>            加订阅，自动挂到带 use: 的代理组
@@ -114,12 +115,12 @@ PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装，在仓库目�
 
 ```bash
 # macOS
-brew install mihomo && brew services start mihomo && mihomo-cli proxy on
+brew install mihomo && brew services start mihomo && mihomo-cli proxy start
 
 # Debian/Ubuntu（用官方 deb，自带 systemd unit，装完 /etc/mihomo/config.yaml 是极简默认配置）
 sudo dpkg -i mihomo-linux-amd64-*.deb
 sudo systemctl enable --now mihomo
-mihomo-cli sub add <订阅链接> && mihomo-cli proxy on
+mihomo-cli sub add <订阅链接> && mihomo-cli proxy start
 ```
 
 > 源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，

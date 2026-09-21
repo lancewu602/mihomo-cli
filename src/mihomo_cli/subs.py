@@ -31,6 +31,7 @@ from .core import (
     listener,
     ok,
     pad,
+    port_bound,
     proxy_port,
     reload_config,
     require_config,
@@ -498,8 +499,11 @@ def _try_subscription(
         routes.append((proxy, f"代理 {proxy}"))
     else:
         routes.append((None, "直连"))
-        if listener(proxy_port()):
-            local = f"http://{HOST}:{proxy_port()}"
+        port = proxy_port()
+        # “有人在听就试一下本机内核”这条兜底对 root 起的内核同样适用：听不出主人也要试
+        # （非 root 看不到别人的 socket→pid，见 core.port_bound）
+        if listener(port) or port_bound(port):
+            local = f"http://{HOST}:{port}"
             routes.append((local, f"本机 mihomo {local}"))
 
     errors = []

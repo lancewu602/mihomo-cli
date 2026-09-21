@@ -12,7 +12,7 @@
     geodata      数据文件：geoip.metadb 这类实体的下载、校验、装进内核目录
     groups       策略组：列组、看选项、切节点、测速
     status       一屏状态（cmd_status）
-    compose      系统代理层：proxy on / off / show（内核启停交给系统原生命令）
+    compose      系统代理层：proxy start / stop / status（内核启停交给系统原生命令）
     cli          命令行入口：argparse、子命令表、异常兜底
 
 依赖方向是单向的：core → kernel → logs → systemproxy → compose → cli，没有循环 import。

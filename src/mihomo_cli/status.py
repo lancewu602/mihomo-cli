@@ -17,16 +17,18 @@ from .core import (
     listener,
     ok,
     pad,
+    port_bound,
     proxy_port,
     read_config,
     run,
+    service_manager,
     size_str,
     warn,
 )
 from .kernel import current_node, mihomo_pid, probe, service_status
 from .logs import find_log_file
 from .subs import provider_overview
-from .systemproxy import active_service, list_services, match_service, proxy_states
+from .systemproxy import active_service, list_services, proxy_states
 
 
 def _ago(secs: float) -> str:
@@ -40,16 +42,22 @@ def _ago(secs: float) -> str:
     return f"{secs / 86400:.0f} 天前"
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def cmd_status(_: argparse.Namespace) -> int:
     port = proxy_port()
     pid = mihomo_pid()
     found = listener(port)
     names = {n for n, _ in found}
+    # “端口上有没有人听”与“知不知道是谁”是两件事：内核以 root 跑时（sudo brew services /
+    # systemd）非 root 认不出主人，found 会是空的，但端口明明在监听。
+    bound = bool(found) or port_bound(port)
 
     # 连通性探测是这屏里最贵的一步（穿代理发两次请求核对 unified-delay，实测 ~0.6s），
     # 所以先丢到线程里跑，等下面把订阅/节点/日志都拼完再来收结果——行的顺序不变，
     # 整体从"各步相加"变成"等最慢那一步"。
-    probe_pool = ThreadPoolExecutor(max_workers=1) if "mihomo" in names else None
+    # 认不出主人时照样探（只要不是**已知的别人**在听）：不然内核以 root 跑的机器上这行永远不出现。
+    probe_pool = (
+        ThreadPoolExecutor(max_workers=1) if "mihomo" in names or (bound and not found) else None
+    )
     probe_future = probe_pool.submit(probe, port) if probe_pool else None
 
     def conn_line() -> None:
@@ -73,8 +81,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             path, where = find_log_file()
             if path and path.exists():
                 line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
-            elif not IS_MACOS:
-                # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件
+            elif not IS_MACOS and service_manager() is not None:
+                # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件。
+                # 这行的前提是**本机真有 systemd**：不然它会跟上面“内核服务 本机没找到 brew 或
+                # systemd”自相矛盾，还给出一个跑不通的 journalctl。没 systemd 就走下面那条实话。
                 usage = re.search(
                     r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
                 )
@@ -135,16 +145,13 @@ def cmd_status(args: argparse.Namespace) -> int:
                 v = dim("读不到（内核没在跑？）")
             line("节点", v)
 
-    # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样
+    # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样。
+    # 只看走默认路由那张（active_service 刻意不猜）；要看别的网卡用 proxy status --all。
     services: list[dict] = []
     svc: dict | None = None
     if IS_MACOS:
         services = list_services()
-        svc = (
-            match_service(args.service, services)
-            if args.service is not None
-            else active_service(services)
-        )
+        svc = active_service(services)
         where = (
             "无活跃网卡"
             if svc is None
@@ -161,16 +168,25 @@ def cmd_status(args: argparse.Namespace) -> int:
         mark = {"running": ok("已启动"), "stopped": bad("已停止")}.get(state, warn(state or "未知"))
         line("内核服务", f"{mark}  {dim(mgr)}")
 
-    if not can_check_listener():
-        line("代理端口", warn(f"{HOST}:{port} 无法确认（本机缺 lsof 和 ss）"))
-    elif not found:
-        line("代理端口", bad(f"{HOST}:{port} 无监听"))
+    if not bound:
+        # 端口表（netstat / /proc）不需要权限，“没人听”这个结论缺 lsof/ss 也成立，只是没法再确认
+        line(
+            "代理端口",
+            bad(f"{HOST}:{port} 无监听")
+            if can_check_listener()
+            else warn(f"{HOST}:{port} 无监听（本机缺 lsof 和 ss，只看得到端口表）"),
+        )
     elif "mihomo" in names:
         who = ", ".join(f"{n}({p})" for n, p in found)
         line("代理端口", ok(f"{HOST}:{port} 监听中") + dim(f"  {who}"))
-    else:
+    elif found:
         who = ", ".join(f"{n}({p})" for n, p in found)
         line("代理端口", warn(f"{HOST}:{port} 被 {who} 占用"))
+    else:
+        line(
+            "代理端口",
+            ok(f"{HOST}:{port} 监听中") + dim("  看不到是哪个进程（root 起来的？）"),
+        )
 
     if api("/version"):
         line("控制接口", ok(f"{read_config('external-controller') or HOST + ':9090'} 可用"))
@@ -214,7 +230,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         if others:
             line(
                 "其它网卡",
-                warn("还开着代理：" + "、".join(others) + "（mihomo-cli proxy off 可关）"),
+                warn("还开着代理：" + "、".join(others) + "（mihomo-cli proxy stop 可关）"),
             )
 
     info_block()

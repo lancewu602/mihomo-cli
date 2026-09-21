@@ -1,11 +1,11 @@
-"""系统代理层：`proxy on|off|show`。
+"""系统代理层：`proxy start|stop|status`。
 
     内核服务由系统原生命令管（brew services / systemctl），本工具不再代劳——
     启停内核是服务管理器的事，我们只**读**它的状态（kernel.service_status()）。
 
 所以这一层只剩系统代理（macOS 的 networksetup），而它有一条不能破的规矩：
 
-  · `proxy on` 之前内核必须在监听 —— 把系统代理指向死端口 = 整机断网。
+  · `proxy start` 之前内核必须在监听 —— 把系统代理指向死端口 = 整机断网。
     `proxy_on()` 自己会拒绝并告诉你去启内核；开完还会真发一次探测，不通就还原。
 
 Linux 上没有系统代理这一层，所以这个命令只在 macOS 注册。
@@ -42,7 +42,7 @@ def _line(label: str, value: str) -> None:
 
 
 def _proxy_target(name: str | None) -> dict:
-    """`proxy on/off` 要动哪张网卡：给了名字就按名字，没给就用活跃那张。"""
+    """`proxy start/stop` 要动哪张网卡：给了名字就按名字，没给就用活跃那张。"""
     services = list_services()
     if name is not None:
         return match_service(name, services)
@@ -53,14 +53,19 @@ def _proxy_target(name: str | None) -> dict:
     return svc
 
 
-def proxy_show(name: str | None = None, show_all: bool = False) -> int:
+def proxy_status(name: str | None = None, show_all: bool = False) -> int:
     """看系统代理现状（只读）。
 
     默认**只看当前活跃那张网卡**（跟 status 一个视角）——要看全部用 --all，指定某张就传网卡名。
     "有哪些网卡、哪张在活跃"是 nics 的活，这里只讲代理指向。"""
     if not IS_MACOS:
         print(dim("系统代理是 macOS 专有（networksetup），本机没有这一层。"))
-        print(dim("  Linux 上：内核用 mihomo-cli kernel；shell 里的 http_proxy 见 mihomo-cli nics"))
+        print(dim("  Linux 上内核壳用原生命令：sudo systemctl start|stop|restart mihomo"))
+        print(
+            dim(
+                "  shell 里的 http_proxy 看 mihomo-cli nics；想让整机流量走内核用 TUN（config 的 tun:）"
+            )
+        )
         return 0
     services = list_services()
     if name is not None:
@@ -102,22 +107,22 @@ def proxy_show(name: str | None = None, show_all: bool = False) -> int:
             _line(
                 "其它网卡",
                 warn("还开着代理：" + "、".join(others))
-                + dim("（看全部：mihomo-cli proxy show --all）"),
+                + dim("（看全部：mihomo-cli proxy status --all）"),
             )
     return 0
 
 
 def cmd_proxy(args: argparse.Namespace) -> int:
-    """`proxy on|off|show`：只管 networksetup 的开关，不动内核。"""
-    action = getattr(args, "proxy_action", None) or "show"
+    """`proxy start|stop|status`：只管 networksetup 的开关，不动内核。"""
+    action = getattr(args, "proxy_action", None) or "status"
     name = getattr(args, "name", None)
-    if action == "show":
-        return proxy_show(name, getattr(args, "all_nics", False))
+    if action == "status":
+        return proxy_status(name, getattr(args, "all_nics", False))
     require_macos(
         f"proxy {action}",
-        "系统代理开关只有 macOS 有（networksetup）；Linux 上内核那半是 mihomo-cli kernel",
+        "系统代理开关只有 macOS 有（networksetup）；Linux 上内核服务用 sudo systemctl start|stop|restart mihomo",
     )
-    if action == "on":
+    if action == "start":
         svc = _proxy_target(name)
         if not svc["enabled"]:
             die(f"网卡 {svc['name']!r} 是停用状态，先在「系统设置 → 网络」里启用它")

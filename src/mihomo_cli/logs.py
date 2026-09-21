@@ -45,8 +45,8 @@ def find_log_file() -> tuple[Path | None, str]:
             name = line[1:] if line.startswith("n") else ""
             if name.startswith("/") and not name.startswith("/dev/"):
                 return Path(name), f"内核进程 PID {pid} 的输出"
-    if not IS_MACOS and (mgr := service_manager()) and mgr[0] == "systemd":
-        # Linux：unit 若写了 StandardOutput=append:/path 就还是文件（照样没人轮转）
+    if not IS_MACOS and service_manager():  # Linux：systemd 在才问 unit
+        # unit 若写了 StandardOutput=append:/path 就还是文件（照样没人轮转）
         p = run("systemctl", "show", "-p", "StandardOutput", "-p", "StandardError", SERVICE_NAME)
         for m in re.finditer(r"^Standard(?:Output|Error)=append:(.+)$", p.stdout, re.M):
             return Path(m.group(1).strip()), "systemd unit 的输出重定向"
@@ -62,11 +62,11 @@ def find_log_file() -> tuple[Path | None, str]:
         guess = Path(MIHOMO_BIN).parent.parent / "var/log/mihomo.log"
         if guess.exists():
             return guess, "按内核路径推出来的"
-    return None, (
-        "没找到文件（Linux 上多半交给 journald 了）"
-        if not IS_MACOS
-        else "没找到（内核没在跑，也不是 brew 装的？）"
-    )
+    if IS_MACOS:
+        return None, "没找到（内核没在跑，也不是 brew 装的？）"
+    if service_manager() is None:  # 没有 systemd，日志就不会在 journald 里
+        return None, "没找到文件（内核没在跑，本机也没有 systemd）"
+    return None, "没找到文件（Linux 上多半交给 journald 了）"
 
 
 def truncate_log() -> str:
@@ -96,7 +96,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
     )
     if path is None:
         print(warn(f"日志位置  {where}"))
-        if not IS_MACOS:
+        if not IS_MACOS and service_manager() is not None:  # 没有 systemd 就别提 journald
             print(
                 dim(
                     "  Linux 上 systemd 默认把输出送进 journald（自己会轮转）："
