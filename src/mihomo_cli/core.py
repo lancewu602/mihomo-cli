@@ -2,8 +2,10 @@
 
 所有子命令都依赖它；它自己不认识任何子命令。
 """
+
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -17,11 +19,10 @@ import urllib.request
 from pathlib import Path
 from typing import NoReturn
 
-
 # ─────────────────────────── 可调参数 ───────────────────────────
 
-HOST = "127.0.0.1"                    # 代理监听地址
-FALLBACK_PORT = 7890                  # 配置文件读不到时的兜底端口
+HOST = "127.0.0.1"  # 代理监听地址
+FALLBACK_PORT = 7890  # 配置文件读不到时的兜底端口
 
 # ── 平台 ──
 # 系统代理开关靠 networksetup，只有 macOS 有；Linux 上内核服务走 systemd。
@@ -34,10 +35,10 @@ RESTART_HINT = "brew services restart mihomo" if IS_MACOS else "systemctl restar
 MIHOMO_DIR_CANDIDATES = [
     Path.home() / ".config/mihomo",
     Path("/etc/mihomo"),
-    Path("/opt/homebrew/etc/mihomo"),      # macOS Apple Silicon（brew）
-    Path("/usr/local/etc/mihomo"),         # macOS Intel（brew）/ Linux 手动安装
+    Path("/opt/homebrew/etc/mihomo"),  # macOS Apple Silicon（brew）
+    Path("/usr/local/etc/mihomo"),  # macOS Intel（brew）/ Linux 手动安装
     Path("/opt/mihomo"),
-    Path("/etc/clash"),                   # 老 Clash 的目录
+    Path("/etc/clash"),  # 老 Clash 的目录
     Path.home() / ".config/clash",
 ]
 
@@ -53,8 +54,8 @@ def discover_mihomo_dir() -> Path:
 
 
 MIHOMO_BIN_CANDIDATES = [
-    "/opt/homebrew/bin/mihomo",        # macOS Apple Silicon（brew）
-    "/usr/local/bin/mihomo",           # macOS Intel（brew）/ Linux 手动装
+    "/opt/homebrew/bin/mihomo",  # macOS Apple Silicon（brew）
+    "/usr/local/bin/mihomo",  # macOS Intel（brew）/ Linux 手动装
     "/usr/bin/mihomo",
     "/opt/mihomo/mihomo",
 ]
@@ -87,11 +88,11 @@ def discover_tool_dir() -> Path:
 
 
 TOOL_DIR = discover_tool_dir()
-STATE_FILE = TOOL_DIR / "state.json"       # macOS 系统代理的原状态，stop 时还原成它
+STATE_FILE = TOOL_DIR / "state.json"  # macOS 系统代理的原状态，stop 时还原成它
 # 连通性/测速目标。默认 https：内核的 unified-delay 要发两次请求核对，http 下容易只拿到第一次
 # （日志里会报 "failed to get the second response"），并且会提示改用 HTTPS
 TEST_URL = os.environ.get("MIHOMO_TEST_URL", "https://www.gstatic.com/generate_204")
-PROBE_TIMEOUT = 4.0                   # 探测超时（秒）
+PROBE_TIMEOUT = 4.0  # 探测超时（秒）
 
 # ─────────────────────────── 输出小工具 ───────────────────────────
 
@@ -99,10 +100,8 @@ _TTY = sys.stdout.isatty()
 
 # 行缓冲：逐条打进度的命令（rules sync / sub add）被重定向或接管道时默认是块缓冲，
 # 过程里什么都看不到（実踩过：接 tail 同步片段，等了三分钟屏幕上一片空白）。
-try:
+with contextlib.suppress(AttributeError, OSError):
     sys.stdout.reconfigure(line_buffering=True)
-except (AttributeError, OSError):
-    pass
 
 
 def _c(code: str, s: str) -> str:
@@ -178,11 +177,15 @@ def proxy_port() -> int:
     return FALLBACK_PORT
 
 
-def http_get(url: str, proxy: str | None = None, timeout: float = 30.0,
-             limit: int = 0, ua: str = "mihomo-cli") -> bytes:
+def http_get(
+    url: str,
+    proxy: str | None = None,
+    timeout: float = 30.0,
+    limit: int = 0,
+    ua: str = "mihomo-cli",
+) -> bytes:
     """下载一个 URL。proxy 形如 http://127.0.0.1:7890，None 表示直连。"""
-    handlers = [urllib.request.ProxyHandler(
-        {"http": proxy, "https": proxy} if proxy else {})]
+    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})]
     opener = urllib.request.build_opener(*handlers)
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     with opener.open(req, timeout=timeout) as r:
@@ -197,7 +200,7 @@ def listener(port: int) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if shutil.which("lsof"):
         p = run("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN")
-        for line in p.stdout.splitlines()[1:]:        # 跳过表头
+        for line in p.stdout.splitlines()[1:]:  # 跳过表头
             parts = line.split()
             if len(parts) >= 2 and parts[1].isdigit():
                 found.append((parts[0], parts[1]))
@@ -220,8 +223,9 @@ def can_check_listener() -> bool:
     return bool(shutil.which("lsof") or shutil.which("ss"))
 
 
-def api_raw(path: str, method: str = "GET", payload: dict | None = None,
-            timeout: float = 2) -> tuple[int, dict | None]:
+def api_raw(
+    path: str, method: str = "GET", payload: dict | None = None, timeout: float = 2
+) -> tuple[int, dict | None]:
     """调内核 API，返回 (HTTP 状态码, JSON)。连不上时状态码是 0。
 
     状态码得留着：测速失败内核回的是 400 加一句 message，跟"内核没起来"不是一回事。
@@ -269,16 +273,19 @@ def require_config() -> Path:
     )
 
 
-BACKUP_DIR = TOOL_DIR / "backups"    # 备份跟规则/状态住一起，不占 mihomo 的配置目录
-BACKUP_KEEP = 5                   # 只保留最近 N 个
+BACKUP_DIR = TOOL_DIR / "backups"  # 备份跟规则/状态住一起，不占 mihomo 的配置目录
+BACKUP_KEEP = 5  # 只保留最近 N 个
 
 
 def fmt_ts(ts: str) -> str:
     """20260920-174755 → 2026-09-20 17:47:55（带序号则缀在后面）。"""
     d, _, rest = ts.partition("-")
     t, _, extra = rest.partition("-")
-    s = (f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
-         if len(d) == 8 and len(t) == 6 else ts)
+    s = (
+        f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
+        if len(d) == 8 and len(t) == 6
+        else ts
+    )
     return f"{s}（第 {extra} 份）" if extra else s
 
 
@@ -307,12 +314,12 @@ def validate_config() -> tuple[bool, str]:
     """跑 mihomo -t。返回 (是否通过, 最有信息量的一行输出)。"""
     p = run(str(MIHOMO_BIN), "-t", "-d", str(MIHOMO_DIR))
     out = (p.stdout + p.stderr).strip()
-    lines = [l for l in out.splitlines() if l.strip()]
+    lines = [line for line in out.splitlines() if line.strip()]
     if p.returncode == 0 and "test is successful" in out:
         return True, lines[-1] if lines else "（无输出）"
-    for l in lines:
-        if "level=error" in l:
-            return False, l
+    for line in lines:
+        if "level=error" in line:
+            return False, line
     return False, lines[-1] if lines else "（无输出）"
 
 
@@ -320,8 +327,7 @@ def reload_config() -> bool:
     """让运行中的 mihomo 重新读配置。"""
     controller = read_config("external-controller") or f"{HOST}:9090"
     body = json.dumps({"path": str(config_path())}).encode()
-    req = urllib.request.Request(f"http://{controller}/configs?force=true",
-                                 data=body, method="PUT")
+    req = urllib.request.Request(f"http://{controller}/configs?force=true", data=body, method="PUT")
     if secret := read_config("secret"):
         req.add_header("Authorization", f"Bearer {secret}")
     try:
@@ -334,10 +340,11 @@ def reload_config() -> bool:
 def list_backups() -> list[tuple[str, Path, Path]]:
     """列出可用备份：[(时间戳, 路径, 所在目录)]，新 → 旧。"""
     cfg = config_path()
-    items: list[tuple[str, Path, Path]] = []
-    for src in (BACKUP_DIR, cfg.parent):
-        for p in src.glob(f"{cfg.name}.bak-*"):
-            items.append((p.name.rsplit(".bak-", 1)[-1], p, src))
+    items: list[tuple[str, Path, Path]] = [
+        (p.name.rsplit(".bak-", 1)[-1], p, src)
+        for src in (BACKUP_DIR, cfg.parent)
+        for p in src.glob(f"{cfg.name}.bak-*")
+    ]
     return sorted(items, key=lambda x: x[0], reverse=True)
 
 
@@ -391,4 +398,3 @@ def commit_config(cfg: Path, lines: list[str], doing: str, reload: bool) -> bool
     else:
         print(dim("  没有热重载；加 --reload 让它立即生效（否则等下次重启 mihomo）"))
     return True
-

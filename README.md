@@ -121,6 +121,10 @@ mihomo-cli sub add <订阅链接> && mihomo-cli start
 > 源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，
 > 没有清单要维护；入口是 `mihomo_cli.cli:main`。为什么要多一层 `src/`、代价是什么，
 > 写在 `docs/packaging.md`。
+>
+> 改代码：`make lint`（ruff check）、`make fmt`（ruff format + 自动修），配置在 pyproject
+> 的 `[tool.ruff]`；提交前跑一下 lint，能拦住不少东西（实测报出过一个 3.9 下直接语法错误的
+> f-string 和一个写错位置的 pyproject 字段）。
 
 ## License
 

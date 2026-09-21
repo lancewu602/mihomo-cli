@@ -3,6 +3,7 @@
 片段在 ~/.config/mihomo-cli/rules/，顺序表是下面的 CANONICAL_ORDER。
 动作：sync 同步片段 / diff 对比现网 / apply 落地（备份→校验→失败回滚）/ rollback 回滚。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -10,15 +11,31 @@ import shutil
 import sys
 from pathlib import Path
 
-from .core import (BACKUP_DIR, RESTART_HINT, TOOL_DIR, bad, backup_config, config_path,
-                  die, dim, fmt_ts, list_backups, ok, reload_config, require_config,
-                  run, size_str, validate_config, warn)
+from .core import (
+    BACKUP_DIR,
+    RESTART_HINT,
+    TOOL_DIR,
+    backup_config,
+    bad,
+    config_path,
+    die,
+    dim,
+    fmt_ts,
+    list_backups,
+    ok,
+    reload_config,
+    require_config,
+    run,
+    size_str,
+    validate_config,
+    warn,
+)
 
 # ─────────────────────── rules 子命令 ───────────────────────
 # 把家目录里的片段拼成 mihomo 的 rules: 区块：片段不带策略（策略由目录名决定），
 # 顺序由下面的 CANONICAL_ORDER 决定。
 
-RULES_DIR = TOOL_DIR / "rules"                    # 家目录里那份，不是仓库里那份
+RULES_DIR = TOOL_DIR / "rules"  # 家目录里那份，不是仓库里那份
 
 # 目录名 → 策略。目录名就是"这批规则要往哪走"。
 # 注意这些名字必须能在 config.yaml 里找到（组名或内建策略），mihomo 会校验。
@@ -30,10 +47,25 @@ RULE_PARAMS = {"no-resolve", "src", "dport"}
 
 # mihomo 1.19 支持的类型；不在表里的会跳过并告警——写进配置会让**整份**加载失败。
 SUPPORTED_RULE_TYPES = {
-    "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-REGEX",
-    "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "SRC-IP-CIDR",
-    "GEOIP", "GEOSITE", "PROCESS-NAME", "PROCESS-PATH",
-    "DST-PORT", "SRC-PORT", "NETWORK", "RULE-SET", "MATCH", "FINAL",
+    "DOMAIN",
+    "DOMAIN-SUFFIX",
+    "DOMAIN-KEYWORD",
+    "DOMAIN-REGEX",
+    "IP-CIDR",
+    "IP-CIDR6",
+    "IP-SUFFIX",
+    "IP-ASN",
+    "SRC-IP-CIDR",
+    "GEOIP",
+    "GEOSITE",
+    "PROCESS-NAME",
+    "PROCESS-PATH",
+    "DST-PORT",
+    "SRC-PORT",
+    "NETWORK",
+    "RULE-SET",
+    "MATCH",
+    "FINAL",
 }
 
 # 片段拼接顺序（**行序就是优先级**）：先到先得，同一域名被多个片段命中时排上面的赢。
@@ -71,11 +103,11 @@ CANONICAL_ORDER: list[tuple[str, str | None]] = [
     # 注：Telegram.list 13 条
     ("proxy/Telegram.list", "节点选择"),
     # 层 6：地域/墙的大清单，从「较具体」到「最糊」
-    ("direct/ChinaMedia.list", "全球直连"),         # 国内媒体：比较具体
-    ("proxy/ProxyLite.list", "节点选择"),           # 精选墙名单（430 条）
-    ("proxy/ProxyMedia.list", "节点选择"),          # 国外媒体
-    ("proxy/ProxyGFWlist.list", "节点选择"),        # GFW 全量（6986 条）
-    ("direct/ChinaDomain.list", "全球直连"),        # 整个 .cn —— 最糊的域名兜底
+    ("direct/ChinaMedia.list", "全球直连"),  # 国内媒体：比较具体
+    ("proxy/ProxyLite.list", "节点选择"),  # 精选墙名单（430 条）
+    ("proxy/ProxyMedia.list", "节点选择"),  # 国外媒体
+    ("proxy/ProxyGFWlist.list", "节点选择"),  # GFW 全量（6986 条）
+    ("direct/ChinaDomain.list", "全球直连"),  # 整个 .cn —— 最糊的域名兜底
     ("direct/ChinaCompanyIp.list", "全球直连"),
     # 层 7：按 IP 判断的兜底，放在域名规则之后（IP 是另一个维度）
     ("direct/ChinaIp.list", "全球直连"),
@@ -98,7 +130,7 @@ def fragment_rules(path: Path) -> list[str]:
 def with_policy(line: str, policy: str | None) -> str:
     """给片段里的规则补上策略。"""
     f = [x.strip() for x in line.split(",")]
-    if f[0].upper() in ("MATCH", "FINAL"):        # 没有 payload
+    if f[0].upper() in ("MATCH", "FINAL"):  # 没有 payload
         return ",".join(f[:1] + ([policy] if policy else []) + f[1:])
     payload, rest = f[1] if len(f) > 1 else "", f[2:]
     if rest and rest[0] not in RULE_PARAMS:
@@ -111,26 +143,39 @@ def build_rules(prune: bool = False) -> tuple[list[str], list[dict], str, dict]:
     origin = f"内置顺序（rules.py 的 CANONICAL_ORDER，{len(CANONICAL_ORDER)} 条）"
     kept, stats, problems = walk_order(CANONICAL_ORDER, prune)
 
-    rules = [line if entry.startswith("[]") else with_policy(line, policy)
-             for entry, policy, line in kept]
-    total = {"n": sum(s["n"] for s in stats.values()),
-             "dup": sum(s["dup"] for s in stats.values()),
-             "shadow": sum(s["shadow"] for s in stats.values())}
-    return rules, problems, origin, {"raw": total["n"], "duplicates": total["dup"],
-                                     "shadowed": total["shadow"], "stats": stats}
+    rules = [
+        line if entry.startswith("[]") else with_policy(line, policy)
+        for entry, policy, line in kept
+    ]
+    total = {
+        "n": sum(s["n"] for s in stats.values()),
+        "dup": sum(s["dup"] for s in stats.values()),
+        "shadow": sum(s["shadow"] for s in stats.values()),
+    }
+    return (
+        rules,
+        problems,
+        origin,
+        {
+            "raw": total["n"],
+            "duplicates": total["dup"],
+            "shadowed": total["shadow"],
+            "stats": stats,
+        },
+    )
 
 
 def split_config(text: str) -> tuple[str, list[str], str]:
     """把 config.yaml 拆成 (rules: 之前, 现有规则, rules: 之后)。"""
     lines = text.splitlines(keepends=True)
-    start = next((i for i, l in enumerate(lines) if l.startswith("rules:")), None)
+    start = next((i for i, line in enumerate(lines) if line.startswith("rules:")), None)
     if start is None:
         die(f"{config_path()} 里找不到 rules: 区块")
     end = start + 1
     while end < len(lines) and (lines[end].startswith("- ") or not lines[end].strip()):
         end += 1
-    head, tail = "".join(lines[:start + 1]), "".join(lines[end:])
-    cur = [l[2:].strip() for l in lines[start + 1:end] if l.startswith("- ")]
+    head, tail = "".join(lines[: start + 1]), "".join(lines[end:])
+    cur = [line[2:].strip() for line in lines[start + 1 : end] if line.startswith("- ")]
     return head, cur, tail
 
 
@@ -149,8 +194,12 @@ def report_problems(problems: list[dict]) -> None:
             print(warn(f"  ⚠ 目录名推不出策略，已跳过：{p['entry']}"))
         elif p["kind"] == "unsupported":
             detail = "、".join(f"{t}×{n}" for t, n in sorted(p["types"].items()))
-            print(warn(f"  ⚠ {p['entry']} 跳过 {sum(p['types'].values())} 条 "
-                       f"mihomo 不支持的类型：{detail}"))
+            print(
+                warn(
+                    f"  ⚠ {p['entry']} 跳过 {sum(p['types'].values())} 条 "
+                    f"mihomo 不支持的类型：{detail}"
+                )
+            )
 
 
 def cmd_rules_rollback(args: argparse.Namespace) -> int:
@@ -163,8 +212,7 @@ def cmd_rules_rollback(args: argparse.Namespace) -> int:
     for i, (ts, p, src) in enumerate(items, 1):
         where = "工具目录" if src == BACKUP_DIR else "config 同级"
         mark = ok("← 默认") if i == 1 else ""
-        print(f"  {i:>2}  {fmt_ts(ts):<28}  {size_str(p.stat().st_size):>9}"
-              f"  {dim(where)}  {mark}")
+        print(f"  {i:>2}  {fmt_ts(ts):<28}  {size_str(p.stat().st_size):>9}  {dim(where)}  {mark}")
     if args.list:
         return 0
 
@@ -189,7 +237,7 @@ def cmd_rules_rollback(args: argparse.Namespace) -> int:
     # 先校验再报成功：不然会先打一句“已回滚”，紧跟着又说“校验失败”
     good, last = validate_config()
     if not good:
-        shutil.copy2(keep, cfg)                     # 回滚的回滚
+        shutil.copy2(keep, cfg)  # 回滚的回滚
         print(bad(f"✗ {fmt_ts(ts)} 这份备份没通过 mihomo -t，已退回回滚前的配置"))
         print(bad(f"  {last}"))
         print(dim(f"  回滚前的配置已存到 {keep}"))
@@ -236,6 +284,8 @@ UPSTREAM = {
     "reject/BanEasyListChina.list": "Clash/BanEasyListChina.list",
     "reject/BanEasyPrivacy.list": "Clash/BanEasyPrivacy.list",
 }
+
+
 def ensure_custom_fragments() -> list[str]:
     """把顺序表里提到的 Custom.list 补成空文件，返回补了哪些。
 
@@ -263,11 +313,13 @@ def local_clone_root(given: str) -> tuple[Path, str]:
     if (p / "Clash").is_dir():
         root = p
     elif p.name == "Clash" and any(p.glob("*.list")):
-        root = p.parent                        # 直接给了 Clash/，往下拼时要去掉这层
+        root = p.parent  # 直接给了 Clash/，往下拼时要去掉这层
     else:
-        die(f"{p} 看着不是 ACL4SSR 的 clone（里面没有 Clash/ 目录）。\n"
+        die(
+            f"{p} 看着不是 ACL4SSR 的 clone（里面没有 Clash/ 目录）。\n"
             f"  给 clone 的根目录，例如：--from ~/GitHub/ACL4SSR\n"
-            f"  （bare clone 没有工作区文件，得给普通 clone 的路径）")
+            f"  （bare clone 没有工作区文件，得给普通 clone 的路径）"
+        )
     probe = root / "Clash/LocalAreaNetwork.list"
     if not probe.is_file():
         die(f"{root} 里找不到 Clash/LocalAreaNetwork.list，不像是完整的 ACL4SSR clone。")
@@ -315,7 +367,7 @@ def cmd_rules_sync(args: argparse.Namespace) -> int:
             print(warn(f"  ~ {rel}  {state}"))
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(data)                    # 上游原文，一字不改
+        dst.write_bytes(data)  # 上游原文，一字不改
         if old is None:
             print(f"  {ok('+')} {rel}  新增  {size_str(len(data))}")
             added += 1
@@ -344,7 +396,7 @@ def cmd_rules_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_rules(args: argparse.Namespace) -> int:
-    action = getattr(args, "rules_action", None) or "diff"   # 不带则默认 diff，只读
+    action = getattr(args, "rules_action", None) or "diff"  # 不带则默认 diff，只读
     # fetch 是 sync 的老名字（argparse 存的是命令行上写的那个词，跟顶层的
     # services/list/ls 一样，得自己映射回正名）
     action = {"fetch": "sync"}.get(action, action)
@@ -354,9 +406,13 @@ def cmd_rules(args: argparse.Namespace) -> int:
         print(warn(f"⚠ 还没拉过规则片段（{RULES_DIR} 不存在）"), file=sys.stderr)
         print(dim("  先跑：mihomo-cli rules sync"), file=sys.stderr)
     if not hasattr(args, "prune"):
-        args.prune = False          # 没走子解析器时没有这个属性
-    return {"diff": cmd_rules_diff, "sync": cmd_rules_sync,
-            "apply": cmd_rules_apply, "rollback": cmd_rules_rollback}[action](args)
+        args.prune = False  # 没走子解析器时没有这个属性
+    return {
+        "diff": cmd_rules_diff,
+        "sync": cmd_rules_sync,
+        "apply": cmd_rules_apply,
+        "rollback": cmd_rules_rollback,
+    }[action](args)
 
 
 def shadow_reason(t: str, v: str, seen_kw: set[str], seen_sfx: set[str]) -> str | None:
@@ -371,21 +427,22 @@ def shadow_reason(t: str, v: str, seen_kw: set[str], seen_sfx: set[str]) -> str 
         if hit := parents & seen_sfx:
             return f"被 DOMAIN-SUFFIX,{sorted(hit)[0]} 覆盖"
     elif t == "DOMAIN-SUFFIX":
-        if hit := (parents - {v}) & seen_sfx:          # 排除自己那一层
+        if hit := (parents - {v}) & seen_sfx:  # 排除自己那一层
             return f"被 DOMAIN-SUFFIX,{sorted(hit)[0]} 覆盖"
     elif t != "DOMAIN-KEYWORD":
         return None
     if t in ("DOMAIN", "DOMAIN-SUFFIX"):
         if k := next((k for k in seen_kw if k in v), None):
             return f"被 DOMAIN-KEYWORD,{k} 覆盖"
-    else:                                              # DOMAIN-KEYWORD
+    else:  # DOMAIN-KEYWORD
         if k := next((k for k in seen_kw if k != v and k in v), None):
             return f"被 DOMAIN-KEYWORD,{k} 覆盖"
     return None
 
 
-def walk_order(order: list[tuple[str, str | None]], prune: bool
-               ) -> tuple[list[tuple[str, str | None, str]], dict[str, dict], list[dict]]:
+def walk_order(
+    order: list[tuple[str, str | None]], prune: bool
+) -> tuple[list[tuple[str, str | None, str]], dict[str, dict], list[dict]]:
     """按顺序扫一遍，算出哪些规则真正生效。"""
     seen_exact: set[tuple[str, str]] = set()
     seen_kw: set[str] = set()
@@ -395,7 +452,7 @@ def walk_order(order: list[tuple[str, str | None]], prune: bool
     problems: list[dict] = []
 
     for entry, explicit in order:
-        if entry.startswith("[]"):                     # 内联规则，自带策略
+        if entry.startswith("[]"):  # 内联规则，自带策略
             kept.append((entry, None, entry[2:].strip()))
             continue
 
@@ -411,27 +468,27 @@ def walk_order(order: list[tuple[str, str | None]], prune: bool
             continue
 
         st = {"n": 0, "dup": 0, "shadow": 0, "examples": []}
-        skipped: dict[str, int] = {}                   # 不支持的类型 → 条数
+        skipped: dict[str, int] = {}  # 不支持的类型 → 条数
         for line in fragment_rules(frag):
             f = [x.strip() for x in line.split(",")]
             t = f[0].upper()
             if t not in SUPPORTED_RULE_TYPES:
-# mihomo 不支持的类型（如 URL-REGEX）：文件保持上游原文，构建时跳过并汇总告警。
+                # mihomo 不支持的类型（如 URL-REGEX）：文件保持上游原文，构建时跳过并汇总告警。
                 skipped[t] = skipped.get(t, 0) + 1
                 continue
             st["n"] += 1
             v = f[1].lower() if len(f) > 1 else ""
-            if (t, v) in seen_exact:                   # 同键的后续出现
+            if (t, v) in seen_exact:  # 同键的后续出现
                 st["dup"] += 1
                 continue
             if why := shadow_reason(t, v, seen_kw, seen_sfx):
                 st["shadow"] += 1
                 if len(st["examples"]) < 2:
                     st["examples"].append((line, why))
-                if prune:                              # 只有剪枝模式才真的丢
+                if prune:  # 只有剪枝模式才真的丢
                     continue
             kept.append((entry, policy, line))
-            seen_exact.add((t, v))                     # 留下来的才能当遮蔽源
+            seen_exact.add((t, v))  # 留下来的才能当遮蔽源
             if t == "DOMAIN-KEYWORD":
                 seen_kw.add(v)
             elif t == "DOMAIN-SUFFIX":
@@ -452,18 +509,18 @@ def walk_order(order: list[tuple[str, str | None]], prune: bool
 def cmd_rules_diff(args: argparse.Namespace) -> int:
     rules, problems, origin, dedup = build_rules(prune=args.prune)
     n_inline = sum(1 for e, _ in CANONICAL_ORDER if e.startswith("[]"))
-    head, cur, tail = split_config(require_config().read_text(encoding="utf-8"))
+    _head, cur, _tail = split_config(require_config().read_text(encoding="utf-8"))
 
     # 注意：同一个 (类型,值) 可能出现在多个片段里。mihomo 先到先得，
     # 所以映射必须保留**第一次**出现的那条，用 setdefault 而不是字典推导（后者留最后一条）。
     cur_map: dict[tuple[str, str], str] = {}
-    for l in cur:
-        cur_map.setdefault(rule_key(l), l)
+    for line in cur:
+        cur_map.setdefault(rule_key(line), line)
     new_map: dict[tuple[str, str], str] = {}
-    for l in rules:
-        new_map.setdefault(rule_key(l), l)
-    added = [l for l in rules if rule_key(l) not in cur_map]
-    removed = [l for l in cur if rule_key(l) not in new_map]
+    for line in rules:
+        new_map.setdefault(rule_key(line), line)
+    added = [line for line in rules if rule_key(line) not in cur_map]
+    removed = [line for line in cur if rule_key(line) not in new_map]
     changed = [k for k in cur_map.keys() & new_map.keys() if cur_map[k] != new_map[k]]
 
     print(dim(f"规则来源：{RULES_DIR}"))
@@ -471,24 +528,34 @@ def cmd_rules_diff(args: argparse.Namespace) -> int:
     print()
     print(f"  片段合计                      {dedup['raw']:>7} 条")
     if args.prune:
-        print(f"  去重 + 剔除被遮蔽（--prune） {dim('-' + str(dedup['duplicates'] + dedup['shadowed'])):>8}")
+        print(
+            f"  去重 + 剔除被遮蔽（--prune） {dim('-' + str(dedup['duplicates'] + dedup['shadowed'])):>8}"
+        )
     else:
         print(f"  去重（同类型+值只留第一条）   {dim('-' + str(dedup['duplicates'])):>8}")
         if dedup["shadowed"]:
             print(dim(f"  （另有 {dedup['shadowed']} 条被更宽的规则遮蔽，加 --prune 一并去掉）"))
-    print(f"  应用后                        {len(rules):>7} 条" + dim(f"（含 {n_inline} 条内联规则）"))
+    print(
+        f"  应用后                        {len(rules):>7} 条" + dim(f"（含 {n_inline} 条内联规则）")
+    )
     print()
     print(f"  现网 {config_path().name}              {len(cur):>7} 条")
     print()
     print(f"  {ok('新增')} {len(added):>7} 条")
-    print(f"  {bad('删除')} {len(removed):>7} 条" + (dim("   ← 现网有、片段里没有") if removed else ""))
-    print(f"  {warn('改策略')} {len(changed):>5} 条" + (dim("   ← 同域名不同目标，先出现的赢") if changed else ""))
+    print(
+        f"  {bad('删除')} {len(removed):>7} 条"
+        + (dim("   ← 现网有、片段里没有") if removed else "")
+    )
+    print(
+        f"  {warn('改策略')} {len(changed):>5} 条"
+        + (dim("   ← 同域名不同目标，先出现的赢") if changed else "")
+    )
 
     if removed:
         print()
         print(dim("  会被删掉的（前 10 条）："))
-        for l in removed[:10]:
-            print(f"    {bad('-')} {l}")
+        for line in removed[:10]:
+            print(f"    {bad('-')} {line}")
         if len(removed) > 10:
             print(dim(f"    …还有 {len(removed) - 10} 条"))
     if changed:
@@ -507,11 +574,11 @@ def cmd_rules_diff(args: argparse.Namespace) -> int:
 
 
 def cmd_rules_apply(args: argparse.Namespace) -> int:
-    rules, problems, origin, dedup = build_rules(prune=args.prune)
+    rules, problems, _origin, dedup = build_rules(prune=args.prune)
     if not rules:
         die("拼出来 0 条规则，拒绝写入（片段是不是都没同步过来？先 rules sync）")
 
-# 片段缺失必须拒绝写入：apply 是整块替换 rules: 区块，少一个片段就等于把那片规则删掉。
+    # 片段缺失必须拒绝写入：apply 是整块替换 rules: 区块，少一个片段就等于把那片规则删掉。
     missing = [p["entry"] for p in problems if p["kind"] == "missing"]
     if missing:
         shown = "\n".join(f"    {e}" for e in missing[:8])
@@ -519,16 +586,25 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
         custom = [e for e in missing if Path(e).name == "Custom.list"]
         # Custom.list 是用户自己的片段，上游不会给——这时候说“去 sync”是废话，
         # 得直接告诉他文件长什么样、怎么补个空的
-        hint = (f"\n  其中 {len(custom)} 个是 Custom.list——你自己的片段，上游不会给：\n"
+        hint = (
+            (
+                f"\n  其中 {len(custom)} 个是 Custom.list——你自己的片段，上游不会给：\n"
                 f"  从备份恢复 {RULES_DIR}，或者建个空的（空 = 没有自定义规则）：\n"
-                + "\n".join(f"    : > {RULES_DIR / e}" for e in custom[:3])) if custom else ""
-        sync_line = ("" if len(custom) == len(missing)
-                     else "  要么先把片段同步过来：mihomo-cli rules sync\n")
+                + "\n".join(f"    : > {RULES_DIR / e}" for e in custom[:3])
+            )
+            if custom
+            else ""
+        )
+        sync_line = (
+            "" if len(custom) == len(missing) else "  要么先把片段同步过来：mihomo-cli rules sync\n"
+        )
         edit_line = "把该片段从 rules.py 的 CANONICAL_ORDER 里去掉（顺序表在代码里）"
-        die(f"有 {len(missing)} 个片段文件不存在，拒绝写入。\n{shown}{more}{hint}\n"
+        die(
+            f"有 {len(missing)} 个片段文件不存在，拒绝写入。\n{shown}{more}{hint}\n"
             f"  照现在这样写下去，这些片段管的规则会被整片删掉。\n"
             f"{sync_line}"
-            f"  要么确实不用它们了：{edit_line}")
+            f"  要么确实不用它们了：{edit_line}"
+        )
 
     cfg = require_config()
     text = cfg.read_text(encoding="utf-8")
@@ -540,8 +616,7 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
     bak = backup_config()
     print(f"{ok('✓')} 已备份 {dim(str(bak))}")
 
-    cfg.write_text(head + "".join(f"- {r}\n" for r in rules) + tail,
-                   encoding="utf-8", newline="\n")
+    cfg.write_text(head + "".join(f"- {r}\n" for r in rules) + tail, encoding="utf-8", newline="\n")
     note = f"（片段 {dedup['raw']} 条"
     if args.prune:
         note += f"，去重+剔除被遮蔽 {dedup['duplicates'] + dedup['shadowed']} 条"
@@ -552,7 +627,7 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
 
     good, last = validate_config()
     if not good:
-        shutil.copy2(bak, cfg)                      # 回滚
+        shutil.copy2(bak, cfg)  # 回滚
         print(bad(f"✗ mihomo -t 校验失败，已回滚到 {bak}"))
         print(bad(f"  {last}"))
         return 1
@@ -566,5 +641,3 @@ def cmd_rules_apply(args: argparse.Namespace) -> int:
     else:
         print(dim("  没有热重载；加 --reload 让它立即生效（否则等下次重启 mihomo）"))
     return 0
-
-

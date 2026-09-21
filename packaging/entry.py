@@ -8,6 +8,7 @@
 要能 import 到包，`src/` 得在搜索路径里——由 mihomo-cli.spec 的 `pathex=["src"]` 负责
 （不用 spec、直接敲 pyinstaller 命令的话就加 `--paths src`）。
 """
+
 from __future__ import annotations
 
 import sys

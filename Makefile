@@ -1,6 +1,8 @@
 # 构建 macOS / Linux 二进制。目标机器不需要装 Python。
 #
-#   make deps           建 .venv 并装 PyInstaller（一次性；也可以直接用 PATH 上的 pyinstaller）
+#   make deps           建 .venv 并装 PyInstaller + ruff（一次性；也可以直接用 PATH 上的）
+#   make lint           ruff check（只检查）
+#   make fmt            ruff format + ruff check --fix（会重排代码，见 docs/README.md 的约定）
 #   make build          目录版：dist/dir/mihomo-cli/mihomo-cli  ← 默认，启动快
 #   make build-onefile  单文件：dist/mihomo-cli（就一个文件，但每次启动都要解包）
 #   make check          跑一遍产物（--help；本机装了 mihomo 时顺带 status）
@@ -26,8 +28,12 @@ BIN ?= $(ONEDIR)
 
 # .venv 里装了就用它，否则用 PATH 上的
 PYINSTALLER ?= $(if $(wildcard $(VENV)/bin/pyinstaller),$(VENV)/bin/pyinstaller,pyinstaller)
+# 同理：ruff 优先 .venv，其次 PATH，都没有就用 uvx 临时跑（不装进项目）
+RUFF ?= $(shell if [ -x $(VENV)/bin/ruff ]; then echo $(VENV)/bin/ruff; \
+                 elif command -v ruff >/dev/null 2>&1; then echo ruff; \
+                 else echo "uvx ruff"; fi)
 
-.PHONY: build build-onefile deps check install clean
+.PHONY: build build-onefile deps lint fmt check install clean
 
 build: $(ONEDIR)
 build-onefile: $(ONEFILE)
@@ -41,7 +47,14 @@ $(ONEDIR): mihomo-cli.spec packaging/entry.py $(SOURCES)
 
 deps:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install --upgrade pip 'pyinstaller>=6.0'
+	$(VENV)/bin/pip install --upgrade pip 'pyinstaller>=6.0' 'ruff>=0.16'
+
+lint:
+	$(RUFF) check .
+
+fmt:
+	$(RUFF) format .
+	$(RUFF) check --fix .
 
 check:
 	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-dir）"; exit 1; }

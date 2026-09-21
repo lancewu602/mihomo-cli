@@ -2,6 +2,7 @@
 
 「按网卡设系统代理」只有 macOS 有（networksetup）；Linux 那边 start/stop 只管内核服务。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -9,10 +10,8 @@ import json
 import re
 import time
 
-from .core import (HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_port,
-                  run, warn)
+from .core import HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_port, run, warn
 from .kernel import ensure_kernel_up, probe, service_manager, stop_kernel
-
 
 # 开代理时写入的绕过列表：这些地址根本不发给 mihomo（跟顺序表第 1 条 LocalAreaNetwork 对齐）。
 # 好处：内网请求少一跳，mihomo 重启那几秒里 NAS / 路由器也不会跟着断。
@@ -22,18 +21,18 @@ BYPASS = [
     "::1",
     "*.local",
     # 私有网段：RFC 1918 + 几个“永远不该出网”的保留段
-    "10.0.0.0/8",        # 大内网（公司/云 VPC）
-    "172.16.0.0/12",     # 中型内网（docker 的 172.17.0.0/16 在这里面）
-    "192.168.0.0/16",    # 家用/小办公室
-    "100.64.0.0/10",     # CGNAT：运营商大内网
-    "0.0.0.0/8",         # 本网络
-    "198.18.0.0/16",     # 基准测试段（TUN/fake-ip 常用）
-    "169.254.0.0/16",    # 链路本地（APIPA、云元数据 169.254.169.254）
-    "224.0.0.0/4",       # IPv4 组播（mDNS 224.0.0.251、SSDP 239.255.255.250）
+    "10.0.0.0/8",  # 大内网（公司/云 VPC）
+    "172.16.0.0/12",  # 中型内网（docker 的 172.17.0.0/16 在这里面）
+    "192.168.0.0/16",  # 家用/小办公室
+    "100.64.0.0/10",  # CGNAT：运营商大内网
+    "0.0.0.0/8",  # 本网络
+    "198.18.0.0/16",  # 基准测试段（TUN/fake-ip 常用）
+    "169.254.0.0/16",  # 链路本地（APIPA、云元数据 169.254.169.254）
+    "224.0.0.0/4",  # IPv4 组播（mDNS 224.0.0.251、SSDP 239.255.255.250）
     # IPv6：注意规则树里没有 ff00::/8，这里是唯一一处拦住它的
-    "fe80::/10",         # 链路本地
-    "fc00::/7",          # ULA（含 fd00::/8）
-    "ff00::/8",          # 组播
+    "fe80::/10",  # 链路本地
+    "fc00::/7",  # ULA（含 fd00::/8）
+    "ff00::/8",  # 组播
 ]
 
 # networksetup 里每一种代理对应的「设置地址」和「开关」子命令名
@@ -71,14 +70,16 @@ def list_services() -> list[dict]:
     services: list[dict] = []
     for line in ns("-listallnetworkservices").splitlines():
         line = line.strip()
-        if not line or line.startswith("An asterisk"):   # 跳过那句说明文字
+        if not line or line.startswith("An asterisk"):  # 跳过那句说明文字
             continue
-        services.append({
-            "name": line.lstrip("*").strip(),
-            "enabled": not line.startswith("*"),
-            "device": "",
-            "active": False,
-        })
+        services.append(
+            {
+                "name": line.lstrip("*").strip(),
+                "enabled": not line.startswith("*"),
+                "device": "",
+                "active": False,
+            }
+        )
 
     # 网卡名和设备名分两行，靠 "(序号) 名字" 触发、紧跟的 Device: 收尾
     current = None
@@ -90,7 +91,7 @@ def list_services() -> list[dict]:
         if (m := re.search(r"Device:\s*(\S*)\)", line)) and current:
             for s in services:
                 if s["name"] == current:
-                    s["device"] = m.group(1)             # 可能是空（Shadowrocket 就没有）
+                    s["device"] = m.group(1)  # 可能是空（Shadowrocket 就没有）
             current = None
 
     device = active_device()
@@ -108,7 +109,7 @@ def active_service(services: list[dict] | None = None) -> dict | None:
     """当前活跃的那张网卡——即走默认路由的那张。没有就返回 None。
 
     这里刻意不做任何猜测：不传网卡名时只认这个唯一可靠的信号。"""
-    for s in (services if services is not None else list_services()):
+    for s in services if services is not None else list_services():
         if s["active"] and s["enabled"]:
             return s
     return None
@@ -138,11 +139,7 @@ def match_service(name: str, services: list[dict]) -> dict:
         die(f"{name!r} 同时匹配多个网卡：{'、'.join(s['name'] for s in hits)}，请写全名")
 
     valid = "、".join(s["name"] for s in services)
-    die(
-        f"没有名为 {name!r} 的网卡。\n"
-        f"  可用的有：{valid}\n"
-        f"  用 mihomo-cli nics 查看详情"
-    )
+    die(f"没有名为 {name!r} 的网卡。\n  可用的有：{valid}\n  用 mihomo-cli nics 查看详情")
 
 
 def resolve_stop_targets(name: str | None) -> tuple[list[dict], str | None]:
@@ -242,10 +239,10 @@ def write_state(data: dict) -> None:
 def save_original_state(service: str) -> None:
     """存下该网卡在 start 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
     data = load_state()
-    if "bypass" in data:        # 早期版本的扁平格式，认不出来，丢掉重记
+    if "bypass" in data:  # 早期版本的扁平格式，认不出来，丢掉重记
         data = {}
     if service in data:
-        return                  # 只在第一次 start 时记录，之后不覆盖
+        return  # 只在第一次 start 时记录，之后不覆盖
     servers = {}
     for kind in KINDS:
         p = get_proxy(service, kind)
@@ -292,14 +289,21 @@ def cmd_start(args: argparse.Namespace) -> int:
         port = proxy_port()
         already = ensure_kernel_up(port)
         mgr = service_manager()
-        print(f"{ok('✓')} 内核" + ("本来就在跑，没动它" if already else "服务已启动")
-              + dim(f"（{mgr[1] if mgr else '手工'}，{HOST}:{port}）"))
+        print(
+            f"{ok('✓')} 内核"
+            + ("本来就在跑，没动它" if already else "服务已启动")
+            + dim(f"（{mgr[1] if mgr else '手工'}，{HOST}:{port}）")
+        )
         print(dim("  系统代理是 macOS 专有（networksetup）；Linux 上到这里就够了"))
         return 0
 
     require_macos("start")
-    svc = match_service(args.service, list_services()) if args.service is not None else active_service()
-    if svc is None:                      # 没活跃网卡就不猜，直接让用户说清楚
+    svc = (
+        match_service(args.service, list_services())
+        if args.service is not None
+        else active_service()
+    )
+    if svc is None:  # 没活跃网卡就不猜，直接让用户说清楚
         die(no_active_nic_error())
     if args.service is None:
         note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
@@ -312,12 +316,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     # 绝不能把系统代理指向一个没在监听的端口——那等于整台机器断网。
     ensure_kernel_up(port)
 
-    save_original_state(service)                         # 先存档，才有得还原
-    set_bypass(service, BYPASS)                          # 先设绕过，再开代理，避免窗口期漏出去
+    save_original_state(service)  # 先存档，才有得还原
+    set_bypass(service, BYPASS)  # 先设绕过，再开代理，避免窗口期漏出去
     for setter, _ in KINDS.values():
-        ns(f"-set{setter}", service, HOST, str(port))    # 写代理地址 + 端口
+        ns(f"-set{setter}", service, HOST, str(port))  # 写代理地址 + 端口
     for _, stater in KINDS.values():
-        ns(f"-set{stater}", service, "on")               # 逐个打开
+        ns(f"-set{stater}", service, "on")  # 逐个打开
 
     print(f"{ok('✓')} 系统代理已开启  {dim(f'({service} → {HOST}:{port})')}")
     for kind in KINDS:
@@ -367,7 +371,7 @@ def teardown(service: str) -> str:
     if changed:
         notes.append("已还原原有代理地址 " + ", ".join(changed))
 
-    for _, stater in KINDS.values():     # 必须在写地址之后，且之后不再写地址
+    for _, stater in KINDS.values():  # 必须在写地址之后，且之后不再写地址
         ns(f"-set{stater}", service, "off")
 
     forget_state(service)
@@ -383,7 +387,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
         targets, why = resolve_stop_targets(args.service)
         if why:
             note(why)
-        if not targets:                  # 没记录也没活跃网卡：本来就是关着的，不算失败
+        if not targets:  # 没记录也没活跃网卡：本来就是关着的，不算失败
             print(dim("没有需要关闭的网卡（也没有 start 记录）"))
         for svc in targets:
             service = svc["name"]
@@ -404,5 +408,3 @@ def cmd_stop(args: argparse.Namespace) -> int:
     if not stop_kernel():
         code = 1
     return code
-
-

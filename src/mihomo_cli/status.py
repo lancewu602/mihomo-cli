@@ -1,20 +1,33 @@
 """status 子命令：把内核、系统代理、出口节点揉成一屏（不带参数时的默认动作）。"""
+
 from __future__ import annotations
 
 import argparse
 import re
 import sys
 
-from .core import (HOST, IS_MACOS, bad, can_check_listener, dim, note, ok, pad,
-                  proxy_port, read_config, run, size_str, warn)
-from .kernel import (api, current_node, find_log_file, listener, mihomo_pid, probe,
-                    service_status)
+from .core import (
+    HOST,
+    IS_MACOS,
+    bad,
+    can_check_listener,
+    dim,
+    note,
+    ok,
+    pad,
+    proxy_port,
+    read_config,
+    run,
+    size_str,
+    warn,
+)
+from .kernel import api, current_node, find_log_file, listener, mihomo_pid, probe, service_status
 from .subs import provider_overview
 from .systemproxy import KINDS, active_service, get_proxy, list_services, match_service
 
 
 def _ago(secs: float) -> str:
-    """"多久以前"，粗粒度就够。"""
+    """ "多久以前"，粗粒度就够。"""
     if secs < 90:
         return f"{secs:.0f} 秒前"
     if secs < 3600:
@@ -39,8 +52,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         for i, p in enumerate(rows):
             bits = []
             if p["nodes"]:
-                bits.append(f"{p['nodes']} 个节点"
-                            + (f"（可用 {p['alive']}）" if p["alive"] is not None else ""))
+                bits.append(
+                    f"{p['nodes']} 个节点"
+                    + (f"（可用 {p['alive']}）" if p["alive"] is not None else "")
+                )
             elif p["cache"]:
                 bits.append(dim("节点数未知（内核没在跑）"))
             if p["groups"]:
@@ -75,11 +90,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
         elif not IS_MACOS:
             # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件
-            usage = re.search(r"take up ([\d.]+ ?[KMGTP]?B?)",
-                              run("journalctl", "--disk-usage").stdout)
-            line("日志", dim("journald（自动轮转）")
-                 + (f"  整机 {usage.group(1)}" if usage else "")
-                 + f"  级别 {level}" + dim("  journalctl -u mihomo"))
+            usage = re.search(
+                r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
+            )
+            line(
+                "日志",
+                dim("journald（自动轮转）")
+                + (f"  整机 {usage.group(1)}" if usage else "")
+                + f"  级别 {level}"
+                + dim("  journalctl -u mihomo"),
+            )
         else:
             line("日志", warn(f"{where}  级别 {level}"))
 
@@ -88,12 +108,18 @@ def cmd_status(args: argparse.Namespace) -> int:
     svc: dict | None = None
     if IS_MACOS:
         services = list_services()
-        svc = (match_service(args.service, services) if args.service is not None
-               else active_service(services))
+        svc = (
+            match_service(args.service, services)
+            if args.service is not None
+            else active_service(services)
+        )
         if svc is not None and args.service is None:
             note(f"未指定网卡名，用当前活跃网卡 {svc['name']}")
-        where = "无活跃网卡" if svc is None else (
-            f"{svc['name']} / {svc['device']}" if svc["device"] else svc["name"])
+        where = (
+            "无活跃网卡"
+            if svc is None
+            else (f"{svc['name']} / {svc['device']}" if svc["device"] else svc["name"])
+        )
     else:
         where = sys.platform
     print(dim(f"mihomo  /  {where}"))
@@ -134,14 +160,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
-    opened = [
-        s["name"] for s in services
-        if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)
-    ]
+    opened = [s["name"] for s in services if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)]
 
     if svc is None:
-        line("网卡代理", warn("已在 " + "、".join(opened) + " 上开启") if opened
-             else bad("所有网卡都未开启"))
+        line(
+            "网卡代理",
+            warn("已在 " + "、".join(opened) + " 上开启") if opened else bad("所有网卡都未开启"),
+        )
     else:
         service = svc["name"]
         states = {k: get_proxy(service, k) for k in KINDS}
@@ -167,5 +192,3 @@ def cmd_status(args: argparse.Namespace) -> int:
         good, info = probe(port)
         line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
     return 0
-
-

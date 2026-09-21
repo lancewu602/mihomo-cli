@@ -2,6 +2,7 @@
 
 只改 config.yaml 的两处——provider 块和各组 use: 列表；全部按行改，不引 YAML 库。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,11 +16,28 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .core import (HOST, MIHOMO_DIR, RESTART_HINT, api, bad, commit_config, config_path,
-                  controller_put, die, dim, listener, ok, pad, proxy_port,
-                  reload_config, require_config, size_str, warn, width)
+from .core import (
+    HOST,
+    MIHOMO_DIR,
+    RESTART_HINT,
+    api,
+    bad,
+    commit_config,
+    config_path,
+    controller_put,
+    die,
+    dim,
+    listener,
+    ok,
+    pad,
+    proxy_port,
+    reload_config,
+    require_config,
+    size_str,
+    warn,
+    width,
+)
 from .kernel import mihomo_pid
-
 
 # ───────────────────── 订阅：proxy-providers ─────────────────────
 #
@@ -28,11 +46,11 @@ from .kernel import mihomo_pid
 # 全部按行改、不引 YAML 库（PyYAML 重 dump 会把 10 万行的注释和排版全丢掉）；
 # 只认块状写法，碰到流式写法直接报错，绝不猜。
 
-SUB_UA = "clash-verge/v2.4.7"        # 机场普遍按 UA 发配置，用个常见客户端的
-SUB_INTERVAL = 3600                  # 内核刷新订阅的间隔（秒）
-SUB_MAX_BYTES = 16 * 1024 * 1024     # 预下载上限，防呆：别把配置目录塞爆
-SUB_EXCLUDE = r"(?i)公告|网站地址|剩余流量|过期时间"   # 机场塞在节点里的假节点
-SUB_NAME_MAX = 64                    # 订阅名长度上限（按字符数，不是字节）
+SUB_UA = "clash-verge/v2.4.7"  # 机场普遍按 UA 发配置，用个常见客户端的
+SUB_INTERVAL = 3600  # 内核刷新订阅的间隔（秒）
+SUB_MAX_BYTES = 16 * 1024 * 1024  # 预下载上限，防呆：别把配置目录塞爆
+SUB_EXCLUDE = r"(?i)公告|网站地址|剩余流量|过期时间"  # 机场塞在节点里的假节点
+SUB_NAME_MAX = 64  # 订阅名长度上限（按字符数，不是字节）
 
 
 def _check_sub_name(name: str) -> str:
@@ -84,10 +102,15 @@ def _scalar_of(v: str) -> str:
 
 def _top_sections(lines: list[str]) -> list[tuple[str, int, int]]:
     """把 config.yaml 切成 [(顶层键, 头行, 结束行)]，顺序即文件顺序。"""
-    heads = [(i, m.group(1)) for i, l in enumerate(lines)
-             if (m := re.match(r"^([A-Za-z_][A-Za-z0-9_.-]*):(.*)$", l))]
-    return [(key, i, heads[k + 1][0] if k + 1 < len(heads) else len(lines))
-            for k, (i, key) in enumerate(heads)]
+    heads = [
+        (i, m.group(1))
+        for i, line in enumerate(lines)
+        if (m := re.match(r"^([A-Za-z_][A-Za-z0-9_.-]*):(.*)$", line))
+    ]
+    return [
+        (key, i, heads[k + 1][0] if k + 1 < len(heads) else len(lines))
+        for k, (i, key) in enumerate(heads)
+    ]
 
 
 def _section_span(lines: list[str], key: str) -> tuple[int, int] | None:
@@ -104,27 +127,31 @@ def _parse_providers(lines: list[str]) -> list[dict]:
         return []
     head, end = span
     rest = lines[head].split(":", 1)[1]
-    if " #" in rest:                       # `proxy-providers:  # 订阅` 这种尾注释不算流式
+    if " #" in rest:  # `proxy-providers:  # 订阅` 这种尾注释不算流式
         rest = rest.split(" #", 1)[0]
     if rest.strip():
-        die(f"{config_path()} 的 proxy-providers 是流式写法（{{…}}），认不出来。\n"
-            f"  先手工改成每行一个 `  名字:` 的块状写法，再来跑 sub。")
+        die(
+            f"{config_path()} 的 proxy-providers 是流式写法（{{…}}），认不出来。\n"
+            f"  先手工改成每行一个 `  名字:` 的块状写法，再来跑 sub。"
+        )
 
     indent: int | None = None
     marks: list[tuple[int, str]] = []
     for i in range(head + 1, end):
-        l = lines[i]
-        if not l.strip() or l.lstrip().startswith("#"):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        cur = len(l) - len(l.lstrip())
+        cur = len(line) - len(line.lstrip())
         if indent is None:
             indent = cur
         if cur != indent:
-            continue                       # 更深/更浅：上一项的字段或不该出现的行
-        if not l.rstrip().endswith(":"):
-            die(f"{config_path()} 第 {i + 1} 行的订阅不是块状写法：\n    {l.rstrip()}\n"
-                f"  本工具只认「`  名字:` 换行 + 缩进写字段」的形式。")
-        marks.append((i, _unquote(l.strip()[:-1])))
+            continue  # 更深/更浅：上一项的字段或不该出现的行
+        if not line.rstrip().endswith(":"):
+            die(
+                f"{config_path()} 第 {i + 1} 行的订阅不是块状写法：\n    {line.rstrip()}\n"
+                f"  本工具只认「`  名字:` 换行 + 缩进写字段」的形式。"
+            )
+        marks.append((i, _unquote(line.strip()[:-1])))
 
     out: list[dict] = []
     for k, (i, name) in enumerate(marks):
@@ -132,20 +159,28 @@ def _parse_providers(lines: list[str]) -> list[dict]:
         # 字段的缩进从块里自己量：标准是名字 +2，但也有人整份配置用 4 空格缩进，
         # 那字段就在 +4。量出来照抄，别拿「+2」去硬套。
         find = None
-        for l in lines[i + 1:stop]:
-            if not l.strip() or l.lstrip().startswith("#"):
+        for line in lines[i + 1 : stop]:
+            if not line.strip() or line.lstrip().startswith("#"):
                 continue
-            cur = len(l) - len(l.lstrip())
+            cur = len(line) - len(line.lstrip())
             find = cur if cur > (indent or 0) else None
             break
         find = (indent or 0) + 2 if find is None else find
         pat = re.compile(rf"^ {{{find}}}([A-Za-z0-9_-]+):\s*(.*?)\s*$")
         fields: dict[str, str] = {}
-        for l in lines[i + 1:stop]:
-            if (m := pat.match(l)) and m.group(2) and not m.group(2).startswith("#"):
+        for line in lines[i + 1 : stop]:
+            if (m := pat.match(line)) and m.group(2) and not m.group(2).startswith("#"):
                 fields.setdefault(m.group(1), _scalar_of(m.group(2)))
-        out.append({"name": name, "head": i, "end": stop,
-                    "indent": indent or 2, "field_indent": find, **fields})
+        out.append(
+            {
+                "name": name,
+                "head": i,
+                "end": stop,
+                "indent": indent or 2,
+                "field_indent": find,
+                **fields,
+            }
+        )
     return out
 
 
@@ -163,15 +198,22 @@ def _parse_groups(lines: list[str]) -> list[dict] | None:
         while stop < end and not lines[stop].startswith("- "):
             stop += 1
         blk = lines[i:stop]
-        out.append({"start": i, "orig_len": len(blk), "lines": blk,
-                    "name": _group_field(blk, "name"), "type": _group_field(blk, "type")})
+        out.append(
+            {
+                "start": i,
+                "orig_len": len(blk),
+                "lines": blk,
+                "name": _group_field(blk, "name"),
+                "type": _group_field(blk, "type"),
+            }
+        )
     return out
 
 
 def _group_field(blk: list[str], key: str) -> str | None:
     pat = re.compile(rf"^(?:- )?\s*{key}:\s*(.+?)\s*$")
-    for l in blk:
-        if m := pat.match(l):
+    for line in blk:
+        if m := pat.match(line):
             return _scalar_of(m.group(1))
     return None
 
@@ -179,16 +221,16 @@ def _group_field(blk: list[str], key: str) -> str | None:
 def _list_span(blk: list[str], key: str) -> tuple[int, int, str, list[int], list[str]] | None:
     """在组里找 `key:` 那个列表：返回 (键行, 缩进, 风格, 项行下标, 现有项)。"""
     pat = re.compile(rf"^(\s*){key}:\s*(.*?)\s*$")
-    for i, l in enumerate(blk):
-        if l.startswith("- "):            # 组的第一行 `- name: …`
+    for i, line in enumerate(blk):
+        if line.startswith("- "):  # 组的第一行 `- name: …`
             continue
-        m = pat.match(l)
+        m = pat.match(line)
         if not m:
             continue
         indent, rest = len(m.group(1)), m.group(2)
         if rest.startswith("["):
             if not rest.endswith("]"):
-                die(f"proxy-groups 里的 {key}: 用了折行的流式写法，认不出来：{l.rstrip()}")
+                die(f"proxy-groups 里的 {key}: 用了折行的流式写法，认不出来：{line.rstrip()}")
             items = [_unquote(x) for x in rest[1:-1].split(",") if x.strip()]
             return i, indent, "inline", [], items
         if rest:
@@ -220,11 +262,11 @@ def _list_item_indent(blk: list[str], key: str) -> int | None:
 
 def _block_indent(blk: list[str]) -> int:
     """组里映射键的缩进（标准是 2）。新建 use: 时按它对齐。"""
-    for l in blk:
-        if l.startswith("- "):
+    for line in blk:
+        if line.startswith("- "):
             continue
-        if re.match(r"^\s*[A-Za-z0-9_-]+:", l):
-            return len(l) - len(l.lstrip())
+        if re.match(r"^\s*[A-Za-z0-9_-]+:", line):
+            return len(line) - len(line.lstrip())
     return 2
 
 
@@ -236,13 +278,12 @@ def _use_edit(blk: list[str], add: list[str] = (), remove: set[str] | frozenset[
         if not add:
             return {"added": [], "removed": [], "created": False, "emptied": False}
         if blk and not blk[-1].endswith("\n"):
-            blk[-1] += "\n"               # 文件末尾没换行时，别把新行接在旧行屁股上
+            blk[-1] += "\n"  # 文件末尾没换行时，别把新行接在旧行屁股上
         ind = _block_indent(blk)
         item_ind = _list_item_indent(blk, "proxies")
         item_ind = ind + 2 if item_ind is None else item_ind
         blk.append(" " * ind + "use:\n")
-        for name in add:
-            blk.append(" " * item_ind + f"- {_yaml_scalar(name)}\n")
+        blk.extend(" " * item_ind + f"- {_yaml_scalar(name)}\n" for name in add)
         return {"added": list(add), "removed": [], "created": True, "emptied": False}
 
     i, indent, style, idxs, items = span
@@ -283,7 +324,7 @@ def _group_node_count(blk: list[str]) -> int:
 def _apply_edits(lines: list[str], edits: list[tuple[int, int, list[str]]]) -> None:
     """edits = [(起始行, 原长度, 新行)]。从后往前替换，前面的下标就不会错位。"""
     for start, old_len, new in sorted(edits, key=lambda e: e[0], reverse=True):
-        lines[start:start + old_len] = new
+        lines[start : start + old_len] = new
 
 
 def _yaml_scalar(s: str) -> str:
@@ -298,29 +339,39 @@ def _yaml_list(items: list[str]) -> str:
     return ", ".join(_yaml_scalar(x) for x in items)
 
 
-def _render_provider(name: str, url: str, proxy: str | None = None, base: int = 2,
-                     field_ind: int | None = None, path: str | None = None) -> list[str]:
+def _render_provider(
+    name: str,
+    url: str,
+    proxy: str | None = None,
+    base: int = 2,
+    field_ind: int | None = None,
+    path: str | None = None,
+) -> list[str]:
     """渲染一个 provider 块（含行尾换行）。base 是名字那一行的缩进。"""
     f = " " * (base + 2 if field_ind is None else field_ind)
     g = f + "  "
-    out = [f"{' ' * base}{_yaml_scalar(name)}:\n",
-           f"{f}type: http\n",
-           f"{f}url: {_yaml_scalar(url)}\n",
-           f"{f}path: {_yaml_scalar(path or f'./providers/{name}.yaml')}\n",
-           f"{f}interval: {SUB_INTERVAL}\n"]
+    out = [
+        f"{' ' * base}{_yaml_scalar(name)}:\n",
+        f"{f}type: http\n",
+        f"{f}url: {_yaml_scalar(url)}\n",
+        f"{f}path: {_yaml_scalar(path or f'./providers/{name}.yaml')}\n",
+        f"{f}interval: {SUB_INTERVAL}\n",
+    ]
     if proxy:
         out.append(f"{f}proxy: {_yaml_scalar(proxy)}\n")
-    out += [f"{f}header:\n",
-            f"{g}User-Agent:\n",
-            f"{g}- {SUB_UA}\n",
-            f"{f}exclude-filter: {SUB_EXCLUDE}\n",
-            f"{f}health-check:\n",
-            f"{g}enable: true\n",
-            f"{g}url: https://www.gstatic.com/generate_204\n",
-            f"{g}interval: 300\n",
-            f"{g}timeout: 5000\n",
-            f"{g}lazy: true\n",
-            f"{g}expected-status: 204\n"]
+    out += [
+        f"{f}header:\n",
+        f"{g}User-Agent:\n",
+        f"{g}- {SUB_UA}\n",
+        f"{f}exclude-filter: {SUB_EXCLUDE}\n",
+        f"{f}health-check:\n",
+        f"{g}enable: true\n",
+        f"{g}url: https://www.gstatic.com/generate_204\n",
+        f"{g}interval: 300\n",
+        f"{g}timeout: 5000\n",
+        f"{g}lazy: true\n",
+        f"{g}expected-status: 204\n",
+    ]
     return out
 
 
@@ -328,6 +379,7 @@ def _same_block(old: list[str], new: list[str]) -> bool:
     """两个 provider 块语义上是不是一样（忽略空行和行内多余空白）。
 
     一样就别写盘：这份配置有 5MB，每写一次都要备份一份，白写一次就多一份 5MB。"""
+
     def norm(ls: list[str]) -> list[str]:
         return sorted(x.rstrip() for x in ls if x.strip())
 
@@ -335,21 +387,24 @@ def _same_block(old: list[str], new: list[str]) -> bool:
 
 
 def _rendered_keys(block: list[str], field_ind: int) -> set[str]:
-    return {m.group(1) for l in block
-            if (m := re.match(r"^\s*([A-Za-z0-9_-]+):", l))
-            and len(l) - len(l.lstrip()) == field_ind}
+    return {
+        m.group(1)
+        for line in block
+        if (m := re.match(r"^\s*([A-Za-z0-9_-]+):", line))
+        and len(line) - len(line.lstrip()) == field_ind
+    }
 
 
 def _carry_over(old: list[str], field_ind: int, rendered: set[str]) -> list[str]:
     """把旧 provider 块里「我们不渲染的字段」原样带过去。"""
     chunks: list[tuple[str | None, list[str]]] = []
-    for l in old:
-        m = re.match(r"^\s*([A-Za-z0-9_-]+):", l)
-        ind = len(l) - len(l.lstrip())
+    for line in old:
+        m = re.match(r"^\s*([A-Za-z0-9_-]+):", line)
+        ind = len(line) - len(line.lstrip())
         if m and ind == field_ind:
-            chunks.append((m.group(1), [l]))
+            chunks.append((m.group(1), [line]))
         elif chunks:
-            chunks[-1][1].append(l)
+            chunks[-1][1].append(line)
     out: list[str] = []
     for key, ls in chunks:
         if key not in rendered:
@@ -360,22 +415,22 @@ def _carry_over(old: list[str], field_ind: int, rendered: set[str]) -> list[str]
 def _upsert_provider_block(lines: list[str], prov: dict | None, block: list[str]) -> None:
     """有同名 provider 就整块替换，没有就插在 proxy-providers 末尾；没这节就建一节。"""
     if prov is not None:
-        lines[prov["head"]:prov["end"]] = block
+        lines[prov["head"] : prov["end"]] = block
         return
     span = _section_span(lines, "proxy-providers")
     if span is not None:
         head, end = span
         if end - 1 != head and lines[end - 1].strip():
-            block = ["\n"] + block          # 跟在别的 provider 后面时空一行，好读
+            block = ["\n", *block]  # 跟在别的 provider 后面时空一行，好读
         lines[end:end] = block
         return
     # 这一节整个不存在：建在 proxy-groups 前面（mihomo 里这个顺序最顺眼），
     # 退而求其次建在 rules 前面，都没有就追加到文件尾。
     anchor = _section_span(lines, "proxy-groups") or _section_span(lines, "rules")
     at = anchor[0] if anchor else len(lines)
-    head_lines = ["proxy-providers:\n"] + block + ["\n"]
+    head_lines = ["proxy-providers:\n", *block, "\n"]
     if at and lines[at - 1].strip():
-        head_lines = ["\n"] + head_lines
+        head_lines = ["\n", *head_lines]
     lines[at:at] = head_lines
 
 
@@ -401,8 +456,7 @@ def _sub_name_from_url(url: str, taken: set[str]) -> str:
 
 def _http_get_sub(url: str, proxy: str | None, timeout: float = 30) -> tuple[bytes, str]:
     """下一份订阅，返回 (内容, subscription-userinfo 头)。带上限，防呆。"""
-    handlers = [urllib.request.ProxyHandler(
-        {"http": proxy, "https": proxy} if proxy else {})]
+    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})]
     opener = urllib.request.build_opener(*handlers)
     req = urllib.request.Request(url, headers={"User-Agent": SUB_UA})
     with opener.open(req, timeout=timeout) as r:
@@ -412,7 +466,9 @@ def _http_get_sub(url: str, proxy: str | None, timeout: float = 30) -> tuple[byt
         return data, (r.headers.get("subscription-userinfo") or "").strip()
 
 
-def _try_subscription(url: str, proxy: str | None) -> tuple[tuple[bytes, str, str] | None, list[str]]:
+def _try_subscription(
+    url: str, proxy: str | None
+) -> tuple[tuple[bytes, str, str] | None, list[str]]:
     """试所有路线拉一次订阅，返回 ((内容, userinfo, 路线) 或 None, 失败原因列表)。
 
     显式给了 --proxy 就只走它：用户说了算，别在背后换出口。"""
@@ -450,9 +506,11 @@ def _fetch_subscription(url: str, proxy: str | None) -> tuple[bytes, str, str]:
     got, errors = _try_subscription(url, proxy)
     if got is not None:
         return got
-    die("订阅下载失败：\n" + "\n".join(f"    {e}" for e in errors) + "\n"
+    die(
+        "订阅下载失败：\n" + "\n".join(f"    {e}" for e in errors) + "\n"
         "  内核跑着的话试试：mihomo-cli sub add <链接> --proxy http://127.0.0.1:7890\n"
-        "  只想先把配置写好（让内核自己去拉）：加 --skip-download")
+        "  只想先把配置写好（让内核自己去拉）：加 --skip-download"
+    )
 
 
 def _b64_text(s: str) -> str:
@@ -494,7 +552,7 @@ def _link_node(link: str) -> tuple[str, str]:
         host = body.rsplit("@", 1)[-1].split(":")[0]
         name = urllib.parse.unquote(frag)
     elif scheme == "vmess":
-        try:                                   # vmess://base64(json)，名字在 "ps"
+        try:  # vmess://base64(json)，名字在 "ps"
             obj = json.loads(_b64_text(rest) or "{}")
             name, host = str(obj.get("ps") or ""), str(obj.get("add") or "")
         except ValueError:
@@ -523,24 +581,28 @@ def _nodes_from_sub(raw: bytes) -> list[tuple[str, str]]:
     lines = text.splitlines()
     # 只在 proxies: 这一节里找（provider 文件正常就这一节；万一整份配置被塞进来，
     # 也不至于把 proxy-groups 里的组名当成节点）
-    for i, l in enumerate(lines):
-        if l.rstrip() == "proxies:":
+    for i, line in enumerate(lines):
+        if line.rstrip() == "proxies:":
             stop = len(lines)
             for j in range(i + 1, len(lines)):
                 if lines[j].strip() and not lines[j].startswith((" ", "\t", "-")):
                     stop = j
                     break
-            lines = lines[i + 1:stop]
+            lines = lines[i + 1 : stop]
             break
-    for i, l in enumerate(lines):
-        if m := re.match(r"^- \{(.*)\}\s*$", l):          # 流式：- {name: x, type: y}
+    for i, line in enumerate(lines):
+        if m := re.match(r"^- \{(.*)\}\s*$", line):  # 流式：- {name: x, type: y}
             fields = dict(re.findall(r"(\w+):\s*([^,}]+)", m.group(1)))
-            rows.append((_unquote(fields.get("name", "").strip()) or "（没有名字）",
-                         _unquote(fields.get("type", "").strip())))
+            rows.append(
+                (
+                    _unquote(fields.get("name", "").strip()) or "（没有名字）",
+                    _unquote(fields.get("type", "").strip()),
+                )
+            )
             continue
-        if m := re.match(r"^- name:\s*(.+?)\s*$", l):      # 块状：- name: x 换行 type: y
+        if m := re.match(r"^- name:\s*(.+?)\s*$", line):  # 块状：- name: x 换行 type: y
             typ = ""
-            for l2 in lines[i + 1:]:
+            for l2 in lines[i + 1 :]:
                 if l2.startswith("- ") or (l2.strip() and not l2.startswith((" ", "\t"))):
                     break
                 if t := re.match(r"^\s+type:\s*(\S+)", l2):
@@ -555,13 +617,13 @@ def _count_nodes(raw: bytes) -> tuple[int | None, str]:
     text = _sub_text(raw)
     if not text:
         return None, "空"
-    if n := sum(1 for l in text.splitlines() if "://" in l):
+    if n := sum(1 for line in text.splitlines() if "://" in line):
         return n, "base64 分享链接"
     lines = text.splitlines()
-    for i, l in enumerate(lines):
-        if l.rstrip() == "proxies:":
+    for i, line in enumerate(lines):
+        if line.rstrip() == "proxies:":
             n = 0
-            for l2 in lines[i + 1:]:
+            for l2 in lines[i + 1 :]:
                 if l2.startswith("- "):
                     n += 1
                 elif l2.strip() and not l2.startswith((" ", "\t")):
@@ -578,7 +640,7 @@ def _fmt_userinfo(raw: str) -> str:
 
     def gb(key: str) -> str | None:
         try:
-            return f"{int(kv.get(key, '').strip()) / 1024 ** 3:.2f}G"
+            return f"{int(kv.get(key, '').strip()) / 1024**3:.2f}G"
         except ValueError:
             return None
 
@@ -612,8 +674,9 @@ def _find_provider(provs: list[dict], what: str) -> dict | None:
     """按名字找订阅；名字没中就按 url 精确/包含匹配。命中不唯一返回 None。"""
     hit = [p for p in provs if p["name"] == what]
     if not hit:
-        hit = [p for p in provs if (p.get("url") or "") == what] or \
-              [p for p in provs if what and what in (p.get("url") or "")]
+        hit = [p for p in provs if (p.get("url") or "") == what] or [
+            p for p in provs if what and what in (p.get("url") or "")
+        ]
     return hit[0] if len(hit) == 1 else None
 
 
@@ -622,7 +685,9 @@ def _match_provider(provs: list[dict], what: str) -> dict:
     prov = _find_provider(provs, what)
     if prov is None:
         ambiguous = any(p["name"] == what or what in (p.get("url") or "") for p in provs)
-        known = "\n".join(f"    {p['name']}  {dim(p.get('url', '（没有 url 字段）'))}" for p in provs)
+        known = "\n".join(
+            f"    {p['name']}  {dim(p.get('url', '（没有 url 字段）'))}" for p in provs
+        )
         die(f"{'匹配到多个' if ambiguous else '没找到'}订阅：{what}\n  现有订阅：\n{known}")
     return prov
 
@@ -637,8 +702,12 @@ def _pick_groups(groups: list[dict] | None, wanted: list[str] | None) -> tuple[l
         by_name = {g["name"]: g for g in groups if g["name"]}
         missing = [w for w in wanted if w not in by_name]
         if missing:
-            die("找不到这些代理组：" + "、".join(missing) + "\n  现有组："
-                + "、".join(g["name"] or "(无名)" for g in groups))
+            die(
+                "找不到这些代理组："
+                + "、".join(missing)
+                + "\n  现有组："
+                + "、".join(g["name"] or "(无名)" for g in groups)
+            )
         return [by_name[w] for w in wanted], ""
     hit = [g for g in groups if _list_span(g["lines"], "use") is not None]
     if hit:
@@ -649,9 +718,14 @@ def _pick_groups(groups: list[dict] | None, wanted: list[str] | None) -> tuple[l
 
 
 def cmd_sub(args: argparse.Namespace) -> int:
-    action = getattr(args, "sub_action", None) or "list"   # 不带则默认 list，只读
-    return {"add": cmd_sub_add, "list": cmd_sub_list, "rm": cmd_sub_rm,
-            "nodes": cmd_sub_nodes, "update": cmd_sub_update}[action](args)
+    action = getattr(args, "sub_action", None) or "list"  # 不带则默认 list，只读
+    return {
+        "add": cmd_sub_add,
+        "list": cmd_sub_list,
+        "rm": cmd_sub_rm,
+        "nodes": cmd_sub_nodes,
+        "update": cmd_sub_update,
+    }[action](args)
 
 
 def _clip(s: str, n: int) -> str:
@@ -682,9 +756,11 @@ def cmd_sub_nodes(args: argparse.Namespace) -> int:
         prov = provs[0] if len(provs) == 1 else None
     if prov is None:
         if args.what:
-            _match_provider(provs, args.what)          # 借它报错并列出现有订阅
-        die("有多个订阅，得指定一个：mihomo-cli sub nodes <名字>\n  现有订阅："
-            + "、".join(p["name"] for p in provs))
+            _match_provider(provs, args.what)  # 借它报错并列出现有订阅
+        die(
+            "有多个订阅，得指定一个：mihomo-cli sub nodes <名字>\n  现有订阅："
+            + "、".join(p["name"] for p in provs)
+        )
     name = prov["name"]
 
     rows: list[tuple[str, str, int | None, bool | None]] = []
@@ -693,14 +769,22 @@ def cmd_sub_nodes(args: argparse.Namespace) -> int:
         source = "内核（存活/延迟是最近一次测速的结果）"
         for p in detail["proxies"]:
             hist = p.get("history") or []
-            rows.append((str(p.get("name") or ""), str(p.get("type") or ""),
-                         hist[-1].get("delay") if hist else None, p.get("alive")))
+            rows.append(
+                (
+                    str(p.get("name") or ""),
+                    str(p.get("type") or ""),
+                    hist[-1].get("delay") if hist else None,
+                    p.get("alive"),
+                )
+            )
     else:
         cache = _provider_cache(prov)
         if not cache.exists():
-            die(f"拿不到 {name} 的节点列表：\n"
+            die(
+                f"拿不到 {name} 的节点列表：\n"
                 f"  内核没在跑，本地也没有缓存 {cache}\n"
-                f"  先拉一次：mihomo-cli sub update {name}")
+                f"  先拉一次：mihomo-cli sub update {name}"
+            )
         source = f"本地缓存 {cache}（内核没加载它，所以没有延迟数据）"
         rows = [(n, t, None, None) for n, t in _nodes_from_sub(cache.read_bytes())]
 
@@ -718,21 +802,28 @@ def cmd_sub_nodes(args: argparse.Namespace) -> int:
     print(dim(f"来源      {source}"))
     print(f"节点      {len(rows)} 个" + (dim(f"（筛选前 {cache_n} 条）") if kw and cache_n else ""))
     if not live:
-        print(dim("          （念的是缓存原文，没滤过「剩余流量/官网地址」这类假节点；"
-                  "内核加载时会按 exclude-filter 滤掉它们）"))
+        print(
+            dim(
+                "          （念的是缓存原文，没滤过「剩余流量/官网地址」这类假节点；"
+                "内核加载时会按 exclude-filter 滤掉它们）"
+            )
+        )
     elif cache_n and cache_n != len(rows):
-        print(dim(f"          （缓存文件里 {cache_n} 个：内核按 exclude-filter 滤掉了"
-                  f"「剩余流量/官网地址」这类假节点，并按名字去重）"))
+        print(
+            dim(
+                f"          （缓存文件里 {cache_n} 个：内核按 exclude-filter 滤掉了"
+                f"「剩余流量/官网地址」这类假节点，并按名字去重）"
+            )
+        )
     if not rows:
         print()
         print(warn("没有匹配的节点" if kw else "这个订阅里没有节点"))
         return 0
 
     if args.limit and len(rows) > args.limit:
-        rows = rows[:args.limit]
+        rows = rows[: args.limit]
     print()
-    print(f"  {pad('#', 5)}{pad('名字', 38)}{pad('类型', 17)}"
-          + ("延迟 / 状态" if live else ""))
+    print(f"  {pad('#', 5)}{pad('名字', 38)}{pad('类型', 17)}" + ("延迟 / 状态" if live else ""))
     for i, (nname, typ, delay, alive) in enumerate(rows, 1):
         line = f"  {pad(str(i), 5)}{pad(_clip(nname, 36), 38)}{pad(_clip(typ, 15), 17)}"
         if live:
@@ -760,13 +851,18 @@ def cmd_sub_add(args: argparse.Namespace) -> int:
     provs = _parse_providers(lines)
     by_url = next((p for p in provs if (p.get("url") or "") == url), None)
 
-    name = _check_sub_name(args.name) if args.name else (
-        by_url["name"] if by_url else _sub_name_from_url(url, {p["name"] for p in provs}))
+    name = (
+        _check_sub_name(args.name)
+        if args.name
+        else (by_url["name"] if by_url else _sub_name_from_url(url, {p["name"] for p in provs}))
+    )
 
     same = next((p for p in provs if p["name"] == name), None)
     if same is not None and same is not by_url:
-        die(f"订阅名 {name!r} 已经属于另一个链接：\n    {same.get('url', '（没有 url 字段）')}\n"
-            f"  换个名字：mihomo-cli sub add {url} --name 别的名字")
+        die(
+            f"订阅名 {name!r} 已经属于另一个链接：\n    {same.get('url', '（没有 url 字段）')}\n"
+            f"  换个名字：mihomo-cli sub add {url} --name 别的名字"
+        )
     updating = same is not None
 
     # 缩进、缓存文件名先定下来：下面每行输出都要用（已有订阅沿用原来的 path，
@@ -779,8 +875,11 @@ def cmd_sub_add(args: argparse.Namespace) -> int:
         path = f"./providers/{_sub_file_name(name, {Path(p['path']).name for p in provs if p.get('path')})}"
 
     print(dim(f"配置文件  {cfg}"))
-    print(dim(f"订阅      {name}  {'（已存在，走更新）' if updating else '（新增）'}"
-              f"　缓存文件 {path}"))
+    print(
+        dim(
+            f"订阅      {name}  {'（已存在，走更新）' if updating else '（新增）'}　缓存文件 {path}"
+        )
+    )
     print(dim(f"链接      {url}"))
 
     body = None
@@ -791,29 +890,28 @@ def cmd_sub_add(args: argparse.Namespace) -> int:
         n, kind = _count_nodes(body)
         how = f"{n} 个节点" if n else f"节点数认不出来（{kind}）"
         stat = _fmt_userinfo(info)
-        print(f"{ok('✓')} 预下载成功  {dim(f'（{route}，{size_str(len(body))}，{how}）')}"
-              + (f"；{stat}" if stat else ""))
+        print(
+            f"{ok('✓')} 预下载成功  {dim(f'（{route}，{size_str(len(body))}，{how}）')}"
+            + (f"；{stat}" if stat else "")
+        )
 
     # 先改 provider，再改组：插块会挪动组的行号，所以组必须在那之后再解析
     block = _render_provider(name, url, args.provider_proxy, base, find, path)
     if same is not None:
         # 改写已有块时，把我们不认识的字段（尤其 proxy:，内核拉订阅要走的节点）
         # 原样带过去；只覆盖本工具认的那几个字段。
-        old_block = lines[same["head"] + 1:same["end"]]
+        old_block = lines[same["head"] + 1 : same["end"]]
         keep = _carry_over(old_block, find, _rendered_keys(block, find))
         if keep:
-            block = block + ["\n"] + keep           # 空行分隔，省得和新字段黏在一起
-    no_change = same is not None and _same_block(lines[same["head"]:same["end"]], block)
+            block = [*block, "\n", *keep]  # 空行分隔，省得和新字段黏在一起
+    no_change = same is not None and _same_block(lines[same["head"] : same["end"]], block)
     _upsert_provider_block(lines, same, block)
 
     groups = _parse_groups(lines)
     targets, why = _pick_groups(groups, args.group)
     if why:
         print(warn(f"⚠ {why}"))
-    touched = []
-    for g in targets:
-        if (_use_edit(g["lines"], add=[name]))["added"]:
-            touched.append(g)
+    touched = [g for g in targets if (_use_edit(g["lines"], add=[name]))["added"]]
     _apply_edits(lines, [(g["start"], g["orig_len"], g["lines"]) for g in touched])
 
     # 自检：写盘之前先确认改出来的东西自己读得回来。读不回来就直接放弃，
@@ -829,8 +927,9 @@ def cmd_sub_add(args: argparse.Namespace) -> int:
 
     if no_change and not touched:
         print(f"{ok('✓')} 配置没有变化（provider 块和组引用都已经是这样）")
-    elif not commit_config(cfg, lines, f"订阅 {name}（共 {len(after_provs)} 个 provider）",
-                            args.reload):
+    elif not commit_config(
+        cfg, lines, f"订阅 {name}（共 {len(after_provs)} 个 provider）", args.reload
+    ):
         return 1
 
     if touched:
@@ -867,9 +966,11 @@ def cmd_sub_rm(args: argparse.Namespace) -> int:
             touched.append(g)
     empty = [g["name"] or "(无名组)" for g in groups if _group_node_count(g["lines"]) == 0]
     if empty:
-        die("删掉这个订阅后，这些代理组一个节点都不剩（mihomo -t 会失败）：\n    "
+        die(
+            "删掉这个订阅后，这些代理组一个节点都不剩（mihomo -t 会失败）：\n    "
             + "、".join(empty)
-            + "\n  先 sub add 另一个订阅，或者手工改这些组。")
+            + "\n  先 sub add 另一个订阅，或者手工改这些组。"
+        )
 
     # 连块前面那条空行一起删（add 时补的分隔行），否则每加一次删一次，
     # 配置里就多留一行空行——「删完应当和加之前逐字节一样」是这里的基本要求。
@@ -887,7 +988,11 @@ def cmd_sub_rm(args: argparse.Namespace) -> int:
     # 删掉最后一个订阅后，如果这一节是空壳（只剩个头，没注释没内容），连节一起收掉：
     # 这样「sub add 再 sub rm」跟没加过一样，不留一个空空的 proxy-providers: 在原地
     span = _section_span(lines, "proxy-providers")
-    if span is not None and not left and all(not l.strip() for l in lines[span[0] + 1:span[1]]):
+    if (
+        span is not None
+        and not left
+        and all(not line.strip() for line in lines[span[0] + 1 : span[1]])
+    ):
         start, stop = span[0], span[1]
         while start > 0 and not lines[start - 1].strip():
             start -= 1
@@ -924,15 +1029,17 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
     in_use: list[str] = []
     for g in _parse_groups(lines) or []:
         span = _list_span(g["lines"], "use")
-        for item in (span[4] if span else []):
+        for item in span[4] if span else []:
             if item not in in_use:
                 in_use.append(item)
     targets = [p for p in provs if p["name"] in in_use]
     idle = [p["name"] for p in provs if p["name"] not in in_use]
     if not targets:
-        die("没有任何代理组在用订阅（use: 里没引用到），没得刷新。\n"
+        die(
+            "没有任何代理组在用订阅（use: 里没引用到），没得刷新。\n"
             "  现有订阅：" + "、".join(p["name"] for p in provs) + "\n"
-            "  想装到组里：mihomo-cli sub add <链接>（默认就会挂到带 use: 的组）")
+            "  想装到组里：mihomo-cli sub add <链接>（默认就会挂到带 use: 的组）"
+        )
 
     live = api("/version") is not None
     pid = mihomo_pid()
@@ -959,8 +1066,11 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
         print(f"  {name}")
         if not url:
             failed.append(name)
-            print(warn("    ⚠ 这个块里没有 url 字段，没法拉；"
-                       "先手工补一行，或者 sub rm 之后再 sub add"))
+            print(
+                warn(
+                    "    ⚠ 这个块里没有 url 字段，没法拉；先手工补一行，或者 sub rm 之后再 sub add"
+                )
+            )
             continue
         api_before = _api_provider_nodes(name) if live else None
         refreshed = False
@@ -983,8 +1093,9 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 cache.write_bytes(body)
-                print(f"    {ok('✓')} 缓存已刷新  "
-                      f"{dim(f'（{route}，{size_str(len(body))}{note}）')}")
+                print(
+                    f"    {ok('✓')} 缓存已刷新  {dim(f'（{route}，{size_str(len(body))}{note}）')}"
+                )
                 refreshed = True
             except OSError as e:
                 print(warn(f"    ⚠ 缓存写不进去（不影响内核拉）：{e}"))
@@ -993,8 +1104,16 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
 
         # 2) 让内核用上：PUT 刷这个 provider，不通就热重载
         if not live:
-            print(dim("    · 内核" + ("重启后才生效（控制接口连不上）" if pid
-                                      else "没在跑，这次改动等它下次启动时生效")))
+            print(
+                dim(
+                    "    · 内核"
+                    + (
+                        "重启后才生效（控制接口连不上）"
+                        if pid
+                        else "没在跑，这次改动等它下次启动时生效"
+                    )
+                )
+            )
         else:
             how, code = _refresh_provider(name)
             if not how:
@@ -1011,10 +1130,14 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
                     print(f"    {ok('✓')} {where}")
                 if how == "reload" and code:
                     # 503 = 内核自己没能把订阅拉下来（比如 provider 里的 proxy: 节点不通）
-                    print(dim(f"    · provider 接口返回 {code}：内核自己拉不动，"
-                              f"走的是「读本地缓存」这条路"))
+                    print(
+                        dim(
+                            f"    · provider 接口返回 {code}：内核自己拉不动，"
+                            f"走的是「读本地缓存」这条路"
+                        )
+                    )
 
-        if not refreshed:            # 缓存没刷成、内核也没刷成 = 这个订阅其实没更新
+        if not refreshed:  # 缓存没刷成、内核也没刷成 = 这个订阅其实没更新
             failed.append(name)
             print(warn("    ⚠ 这个订阅没更新成：预下载和内核刷新都没成功"))
 
@@ -1035,7 +1158,7 @@ def cmd_sub_list(_: argparse.Namespace) -> int:
     used: dict[str, list[str]] = {}
     for g in groups:
         span = _list_span(g["lines"], "use")
-        for item in (span[4] if span else []):
+        for item in span[4] if span else []:
             used.setdefault(item, []).append(g["name"] or "(无名)")
 
     print(dim(f"配置文件  {cfg}"))
@@ -1063,8 +1186,9 @@ def cmd_sub_list(_: argparse.Namespace) -> int:
         print(f"  {pad(p['name'], 22)}{node_cell}{pad(refresh, 8)}{gcell}{cache_cell}")
         print(f"      {dim(p.get('url', '（没有 url 字段）'))}")
     print()
-    print(dim(f"共 {len(provs)} 个订阅；"
-              f"加：mihomo-cli sub add <链接>　删：mihomo-cli sub rm <名字>"))
+    print(
+        dim(f"共 {len(provs)} 个订阅；加：mihomo-cli sub add <链接>　删：mihomo-cli sub rm <名字>")
+    )
     return 0
 
 
@@ -1083,14 +1207,15 @@ def provider_overview() -> list[dict]:
     used: dict[str, list[str]] = {}
     for g in groups:
         span = _list_span(g["lines"], "use")
-        for item in (span[4] if span else []):
+        for item in span[4] if span else []:
             used.setdefault(item, []).append(g["name"] or "(无名)")
 
     live = (api("/providers/proxies") or {}).get("providers") or {}
     out: list[dict] = []
     for p in provs:
-        nodes = [n for n in ((live.get(p["name"]) or {}).get("proxies") or [])
-                 if isinstance(n, dict)]
+        nodes = [
+            n for n in ((live.get(p["name"]) or {}).get("proxies") or []) if isinstance(n, dict)
+        ]
         delays = []
         for n in nodes:
             for extra in (n.get("extra") or {}).values():
@@ -1099,14 +1224,16 @@ def provider_overview() -> list[dict]:
                     delays.append((hist[-1]["delay"], n.get("name")))
         cache = _provider_cache(p)
         exists = cache.exists()
-        out.append({
-            "name": p["name"],
-            "groups": used.get(p["name"], []),
-            "nodes": len(nodes) or None,
-            "alive": sum(1 for n in nodes if n.get("alive")) if nodes else None,
-            "fastest": min(delays) if delays else None,
-            "untested": len(nodes) - len(delays) if nodes else None,
-            "cache": cache.stat().st_size if exists else None,
-            "age": time.time() - cache.stat().st_mtime if exists else None,
-        })
+        out.append(
+            {
+                "name": p["name"],
+                "groups": used.get(p["name"], []),
+                "nodes": len(nodes) or None,
+                "alive": sum(1 for n in nodes if n.get("alive")) if nodes else None,
+                "fastest": min(delays) if delays else None,
+                "untested": len(nodes) - len(delays) if nodes else None,
+                "cache": cache.stat().st_size if exists else None,
+                "age": time.time() - cache.stat().st_mtime if exists else None,
+            }
+        )
     return out

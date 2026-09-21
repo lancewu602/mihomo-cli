@@ -38,10 +38,11 @@ docs/  README.md  pyproject.toml  MANIFEST.in
 ## 构建二进制
 
 ```bash
-make deps                 # 建 .venv 并装 PyInstaller（一次性）
+make deps                 # 建 .venv 并装 PyInstaller + ruff（一次性）
 make build                # → dist/dir/mihomo-cli/mihomo-cli（目录版，默认）
 make build-onefile        # → dist/mihomo-cli（单文件）
 make check                # --help + file + 体积 +（本机有 mihomo 时）status 冒烟
+make lint                 # ruff check（开发时用；代码风格约定见 docs/README.md）
 sudo make install         # 拷到 /usr/local/bin（PREFIX=... 可改）
 ```
 

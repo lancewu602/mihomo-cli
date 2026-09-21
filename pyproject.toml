@@ -47,3 +47,19 @@ packages = ["mihomo_cli"]
 [tool.setuptools.data-files]
 "share/doc/mihomo-cli" = ["README.md", "LICENSE"]
 "share/doc/mihomo-cli/docs" = ["docs/*.md"]
+
+# 开发时的检查与格式化：ruff 一个工具顶 flake8 / isort / black / pyupgrade。
+# 运行时依赖仍然是零——ruff 只在开发时用（`make deps` 装进 .venv，或直接 `uvx ruff`）。
+[tool.ruff]
+target-version = "py39"        # 与 requires-python 对齐；改这里要同步改那边
+line-length = 100              # 默认 88 对中文注释偏紧
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF"]
+ignore = [
+    # 全角标点被判成"易混字符"：这个仓库的注释与文案本来就是中文，1514 条全是噪声
+    "RUF001", "RUF002", "RUF003",
+    # 中文按"字符数"算，实际显示宽度是两倍，line-length 管不住这类超长行
+    "E501",
+]

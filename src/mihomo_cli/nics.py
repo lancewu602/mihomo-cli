@@ -2,6 +2,7 @@
 
 Linux 上没有「按网卡设系统代理」这回事，所以那边只报现状，不改任何设置。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,7 +15,6 @@ from pathlib import Path
 from .core import IS_MACOS, bad, dim, ok, pad, warn
 from .kernel import service_status
 from .systemproxy import active_service, list_services, proxy_summary, require_macos
-
 
 # ───────────── Linux：网卡与代理现状（nics 用）─────────────
 #
@@ -30,7 +30,7 @@ def iface_ipv4(name: str) -> str | None:
         req = struct.pack("256s", name.encode()[:15])
         return socket.inet_ntoa(fcntl.ioctl(s.fileno(), SIOCGIFADDR, req)[20:24])
     except OSError:
-        return None                     # 网卡没地址（DOWN 的）就是没有，不是错
+        return None  # 网卡没地址（DOWN 的）就是没有，不是错
     finally:
         s.close()
 
@@ -67,8 +67,14 @@ def linux_interfaces() -> list[dict]:
             state = (d / "operstate").read_text().strip() or "unknown"
         except OSError:
             state = "unknown"
-        out.append({"name": d.name, "state": state.lower(), "kind": _iface_kind(d, d.name),
-                    "ip": iface_ipv4(d.name)})
+        out.append(
+            {
+                "name": d.name,
+                "state": state.lower(),
+                "kind": _iface_kind(d, d.name),
+                "ip": iface_ipv4(d.name),
+            }
+        )
     return out
 
 
@@ -78,7 +84,7 @@ def linux_default_route() -> tuple[str, str | None] | None:
         lines = Path("/proc/net/route").read_text().splitlines()
     except OSError:
         return None
-    for line in lines[1:]:                 # 第一行是表头
+    for line in lines[1:]:  # 第一行是表头
         f = line.split()
         if len(f) >= 3 and f[1] == "00000000":
             gw = socket.inet_ntoa(struct.pack("<L", int(f[2], 16)))
@@ -110,7 +116,7 @@ def nics_linux() -> int:
     print()
     print(f"    {pad('接口', 16)}{pad('状态', 10)}{pad('IPv4', 18)}类型")
     for i in ifaces:
-        mark = "●" if i["name"] == dev else " "          # ● = 默认路由走那张
+        mark = "●" if i["name"] == dev else " "  # ● = 默认路由走那张
         name_cell = pad(i["name"], 16) if i["state"] == "up" else dim(pad(i["name"], 16))
         print(f"  {mark} {name_cell}{pad(i['state'], 10)}{pad(i['ip'] or '—', 18)}{i['kind']}")
 
@@ -123,8 +129,11 @@ def nics_linux() -> int:
     if env:
         print("  代理变量  " + "  ".join(f"{k}={v}" for k, v in env.items()))
     else:
-        print(dim("  代理变量  没设 http_proxy/https_proxy/all_proxy"
-                  "（它们只影响从 shell 启动的进程）"))
+        print(
+            dim(
+                "  代理变量  没设 http_proxy/https_proxy/all_proxy（它们只影响从 shell 启动的进程）"
+            )
+        )
     state, label = service_status()
     if label:
         mark = {"running": ok("已启动"), "stopped": bad("已停止")}.get(state, warn(state))
@@ -132,8 +141,11 @@ def nics_linux() -> int:
     else:
         print(dim("  内核服务  本机没找到 systemd（容器里常见），内核得自己起"))
     print()
-    print(dim("  服务端要让流量走内核就两条路：内核 TUN（config.yaml 的 tun:）"
-              "或给进程设 http_proxy；"))
+    print(
+        dim(
+            "  服务端要让流量走内核就两条路：内核 TUN（config.yaml 的 tun:）或给进程设 http_proxy；"
+        )
+    )
     print(dim("  节点/端口/出口看 mihomo-cli status，订阅和规则用 sub / rules"))
     return 0
 
@@ -154,8 +166,10 @@ def cmd_nics(_: argparse.Namespace) -> int:
             state_cell = state_cell.replace("活跃", ok("活跃"))
         elif not s["enabled"]:
             state_cell = dim(state_cell)
-        mark = "●" if s["active"] else " "          # ● 标出默认路由走的那张
-        print(f"  {mark} {name_cell}{pad(s['device'] or '—', 10)}{state_cell}{proxy_summary(s['name'])}")
+        mark = "●" if s["active"] else " "  # ● 标出默认路由走的那张
+        print(
+            f"  {mark} {name_cell}{pad(s['device'] or '—', 10)}{state_cell}{proxy_summary(s['name'])}"
+        )
 
     auto = active_service(services)
     print()
@@ -165,5 +179,3 @@ def cmd_nics(_: argparse.Namespace) -> int:
         print(warn("当前没有活跃网卡（没默认路由），start 不传网卡名会直接失败"))
     print(dim('例：mihomo-cli start "USB 10/100 LAN"'))
     return 0
-
-

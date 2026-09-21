@@ -20,6 +20,12 @@
 
 ## 维护约定
 
+- **改完代码跑 `make lint`**（ruff check，配置在 `pyproject.toml` 的 `[tool.ruff]`）。
+  ruff 只在开发时用（`make deps` 装进 .venv，或直接 `uvx ruff`），运行时依赖仍然是零。
+- `make fmt` = `ruff format` + `ruff check --fix`，**会重排代码**，两个已知代价是接受了的：
+  行内注释的列对齐被压成两个空格（ruff format 没有开关能保留），以及中文长行会被折行。
+  所以：**跑过 fmt 之后，`control-api.md` 里那些 `文件:行号` 引用要重新对一遍**（格式化会
+  整体移位；用 `grep -n` 找新的行号，别照旧数）。
 - 改了外部行为（命令、参数、输出字段），同步改 `README.md` 的命令表。
 - 改了控制接口端点或新增端点，同步改 `control-api.md` 里那张"本项目用了哪些"的表
   （带 `文件:行号`，改了要一起更新）。
