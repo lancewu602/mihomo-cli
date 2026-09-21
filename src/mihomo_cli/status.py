@@ -66,7 +66,30 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  {pad(label, 12)} {value}")
 
     def info_block() -> None:
-        """订阅 / 节点 / 日志：都是「看一眼」的信息，排在出口和连通性前面。"""
+        """日志 / 订阅 / 节点：都是「看一眼」的信息，排在出口和连通性前面。"""
+
+        # 日志排最上面：它是"内核在往哪写、写了多少"这种静态信息，先看一眼再管节点
+        def log_line() -> None:
+            level = read_config("log-level") or "（没写）"
+            path, where = find_log_file()
+            if path and path.exists():
+                line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
+            elif not IS_MACOS:
+                # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件
+                usage = re.search(
+                    r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
+                )
+                line(
+                    "日志",
+                    dim("journald（自动轮转）")
+                    + (f"  整机 {usage.group(1)}" if usage else "")
+                    + f"  级别 {level}"
+                    + dim("  journalctl -u mihomo"),
+                )
+            else:
+                line("日志", warn(f"{where}  级别 {level}"))
+
+        log_line()
         rows = provider_overview()
         for i, p in enumerate(rows):
             bits = []
@@ -102,25 +125,6 @@ def cmd_status(args: argparse.Namespace) -> int:
             else:
                 v = dim("读不到（内核没在跑？）")
             line("节点", v)
-
-        level = read_config("log-level") or "（没写）"
-        path, where = find_log_file()
-        if path and path.exists():
-            line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
-        elif not IS_MACOS:
-            # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件
-            usage = re.search(
-                r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
-            )
-            line(
-                "日志",
-                dim("journald（自动轮转）")
-                + (f"  整机 {usage.group(1)}" if usage else "")
-                + f"  级别 {level}"
-                + dim("  journalctl -u mihomo"),
-            )
-        else:
-            line("日志", warn(f"{where}  级别 {level}"))
 
     # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样
     services: list[dict] = []
