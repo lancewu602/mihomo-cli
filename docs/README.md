@@ -7,7 +7,6 @@
 |---|---|
 | [control-api.md](control-api.md) | 要调 mihomo 控制接口、或改 status / group / sub 的取数逻辑 |
 | [packaging.md](packaging.md) | 改安装方式、加顶层 `.py`、动 `pyproject.toml`、要打成单文件 |
-| [tui.md](tui.md) | 动 `status --watch`、或考虑上真正的全屏 TUI |
 
 ## 分发
 

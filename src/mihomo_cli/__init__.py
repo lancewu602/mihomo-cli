@@ -10,7 +10,7 @@
     rules        规则：片段同步、与 config.yaml 对比、按顺序表拼接落地、回滚
     geodata      数据文件：geoip.metadb 这类实体的下载、校验、装进内核目录
     groups       策略组：列组、看选项、切节点、测速
-    status       一屏状态：render() 渲染、watch() 持续刷新
+    status       一屏状态（cmd_status）
     cli          命令行入口：argparse、子命令表、异常兜底
 
 依赖方向大致是 core → kernel → 其余 → cli，没有循环 import。

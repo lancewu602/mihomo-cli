@@ -30,8 +30,7 @@ nics [网卡名]            列网卡（macOS 网络服务 / Linux 接口与路�
 start [网卡名]           内核没跑就先交给服务管理器拉起，等端口就绪，再开系统代理
 stop [网卡名]            先关系统代理，再停内核服务
 restart [--keep-log]     重启内核服务让新配置生效；默认顺手清空日志
-status [网卡名] [--watch]  内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
-                          --watch 持续刷新（清屏重画，Ctrl-C 退出）
+status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性（默认动作）
 
 sub list                 列出订阅：节点数、刷新间隔、挂在哪些组、本地缓存
 sub add <链接>            加订阅，自动挂到带 use: 的代理组
@@ -58,17 +57,12 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 每个子命令的开关：`mihomo-cli <命令> --help`。
 
-`status --watch` 只给终端用（输出接管道会被直接拒绝），Ctrl-C 退出。一帧本身要 2~4 秒
-（`brew services list` 就占 1.6 秒，还有一次穿代理的连通性探测），所以实际刷新周期
-≈ `--interval` + 一帧耗时——页脚会把上一帧的耗时打出来。
-
 ## 文档
 
 | 文档 | 什么时候看 |
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
 | [docs/packaging.md](docs/packaging.md) | 目录结构、安装/打包路线、`console_scripts` 的异常兜底坑 |
-| [docs/tui.md](docs/tui.md) | `status --watch` 的实现与实测耗时、以后上全屏 TUI 的骨架和坑 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，

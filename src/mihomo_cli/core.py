@@ -126,17 +126,8 @@ def dim(s: str) -> str:
     return _c("2", s)
 
 
-_SEEN_NOTES: set[str] = set()
-
-
 def note(msg: str) -> None:
-    """解释"为什么选了这个网卡"。走 stderr，不污染 stdout，可以安全接管道。
-
-    同一条只说一次：status --watch 每轮都会重新解释一遍，重复刷屏就成噪音了。
-    """
-    if msg in _SEEN_NOTES:
-        return
-    _SEEN_NOTES.add(msg)
+    """解释"为什么选了这个网卡"。走 stderr，不污染 stdout，可以安全接管道。"""
     print(dim("· " + msg), file=sys.stderr)
 
 

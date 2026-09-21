@@ -12,7 +12,7 @@ start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
     start [网卡名]    内核没跑先拉起，再开系统代理（Linux 只启内核服务）
     stop [网卡名]     先关系统代理，再停内核服务
     restart [--keep-log]  重启内核服务（让新配置生效）；默认顺手清空日志
-    status [网卡名] [--watch]  内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
+    status [网卡名]   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
     logs   [--truncate]  内核日志在哪、多大；--truncate 清空
     group  [组名] [编号|选项 | --test]  策略组：列组 / 看选项 / 切换 / 测速（选项可报编号）
 
@@ -26,7 +26,7 @@ start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
 内核配置目录自动探测 ~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo…（MIHOMO_DIR 可覆盖）。
 零第三方依赖，只用标准库；内核由 brew services / systemd 常驻，本工具不自己 fork 进程。
 
-改代码前先看 docs/：control-api.md（控制接口）、packaging.md（安装/打包）、tui.md（交互界面）。
+改代码前先看 docs/：control-api.md（控制接口）、packaging.md（构建二进制与安装）。
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from .groups import cmd_group
 from .kernel import cmd_logs, cmd_restart
 from .nics import cmd_nics
 from .rules import cmd_rules
-from .status import WATCH_DEFAULT, cmd_status
+from .status import cmd_status
 from .subs import cmd_sub
 from .systemproxy import cmd_start, cmd_stop
 
@@ -58,7 +58,7 @@ SUBCOMMANDS = {
     "start": ("内核没跑先拉起，再开系统代理（Linux 只启内核服务）", cmd_start),
     "stop": ("先关系统代理，再停内核服务", cmd_stop),
     "restart": ("重启内核服务（让新配置生效）；顺手清空日志", cmd_restart),
-    "status": ("查看当前状态（--watch 持续刷新）", cmd_status),
+    "status": ("查看当前状态（默认）", cmd_status),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics", "subs": "sub"}
@@ -130,11 +130,6 @@ def _main(argv: list[str] | None = None) -> int:
             p.add_argument("option", nargs="?", metavar="选项",
                            help="切到哪个：选项编号（看 group <组名> 那列）或名字的一段")
             p.add_argument("--test", action="store_true", help="触发测速，按延迟排序")
-        if fn is cmd_status:
-            p.add_argument("--watch", action="store_true",
-                           help="一直刷新：自己清屏重画，Ctrl-C 退出（只给终端用）")
-            p.add_argument("--interval", type=float, default=None, metavar="秒",
-                           help=f"--watch 的刷新间隔，默认 {WATCH_DEFAULT:g} 秒")
         if fn is cmd_restart:
             p.add_argument("--keep-log", action="store_true",
                            help="保留旧日志（默认重启前清空，免得越滚越大）")
