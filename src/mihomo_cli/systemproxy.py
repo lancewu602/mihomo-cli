@@ -15,6 +15,7 @@ from pathlib import Path
 from .core import (
     HOST,
     IS_MACOS,
+    SERVICE_HINT,
     STATE_FILE,
     bad,
     die,
@@ -135,7 +136,7 @@ def no_active_nic_error() -> str:
     return (
         "当前没有活跃网卡（没有默认路由），不知道该给哪张网卡开代理。\n"
         f"  可用的有：{'、'.join(s['name'] for s in nics)}\n"
-        '  也可以直接指定：mihomo-cli start "USB 10/100 LAN"'
+        '  也可以直接指定：mihomo-cli proxy on "USB 10/100 LAN"'
     )
 
 
@@ -175,11 +176,11 @@ def resolve_stop_targets(name: str | None) -> tuple[list[dict], str | None]:
     targets = [s for s in services if s["name"] in recorded]
     if targets:
         names = "、".join(s["name"] for s in targets)
-        return targets, f"未指定网卡名，关掉之前 start 过的：{names}"
+        return targets, f"未指定网卡名，关掉之前开过代理的：{names}"
 
     svc = active_service(services)
     if svc:
-        return [svc], f"未指定网卡名，没有 start 记录，看的就是活跃网卡 {svc['name']}"
+        return [svc], f"未指定网卡名，没有开启记录，看的就是活跃网卡 {svc['name']}"
     return [], None
 
 
@@ -256,7 +257,7 @@ def write_state(data: dict) -> None:
 
 
 def save_original_state(service: str) -> None:
-    """存下该网卡在 start 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
+    """存下该网卡在 proxy on 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
     data = load_state()
     if "bypass" in data:  # 早期版本的扁平格式，认不出来，丢掉重记
         data = {}
@@ -295,10 +296,11 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
         die(
             f"{what} 只在 macOS 上可用：{why}。\n"
             f"  Linux 上没有 networksetup，系统代理这一层不适用；\n"
-            f"  内核服务、订阅、规则那几类命令两端通用：\n"
-            f"    mihomo-cli start / stop / restart   # 启停内核服务\n"
+            f"  内核服务自己起：sudo systemctl start|stop|restart mihomo\n"
+            f"  两端通用的命令：\n"
+            f"    mihomo-cli status / nics / logs\n"
             f"    mihomo-cli sub add|list|nodes|update|rm\n"
-            f"    mihomo-cli rules diff / apply"
+            f"    mihomo-cli rules diff / apply / geodata list"
         )
 
 
@@ -399,33 +401,6 @@ def open_nics(
     return [name for name, kinds in states.items() if any(p["enabled"] for p in kinds.values())]
 
 
-def proxies_pointing_here(
-    states: dict[str, dict[str, dict]] | None = None, *, fresh: bool = False
-) -> list[str]:
-    """哪些网卡的系统代理正指着本工具的端口。
-
-    用来拦住"内核停了但那几张网卡还指着它"——那种状态下停内核等于整机断网。"""
-    mine = f"{HOST}:{proxy_port()}"
-    states = states if states is not None else (fresh_proxy_states() if fresh else proxy_states())
-    return [
-        name
-        for name, kinds in states.items()
-        if any(p["enabled"] and f"{p['server']}:{p['port']}" == mine for p in kinds.values())
-    ]
-
-
-def verify_open_nics(port: int) -> None:
-    """重启内核之后，对有开着代理的网卡真发一个请求验证（只打印，不改设置）。"""
-    opened = open_nics()
-    if not opened:
-        print(dim("  系统代理没开着；要让流量走内核就 mihomo-cli start"))
-        return
-    good, info = probe(port)
-    print(f"    连通性 {ok('✓ ' + info) if good else bad('✗ ' + info)}" + dim(f"  （{opened[0]}）"))
-    if not good:
-        print(dim("    看节点：mihomo-cli status / mihomo-cli sub nodes"))
-
-
 def proxy_on(service: str) -> int:
     """在指定网卡上开系统代理。**不负责拉内核**——内核必须已经在监听。
 
@@ -438,7 +413,7 @@ def proxy_on(service: str) -> int:
         die(
             f"{HOST}:{port} 上没有 mihomo 在监听（{who}）。\n"
             f"  拒绝把系统代理指过去——那等于整机断网。\n"
-            f"  先起内核：mihomo-cli kernel start（想一步到位就用 mihomo-cli start）"
+            f"  先起内核：{SERVICE_HINT}"
         )
 
     save_original_state(service)  # 先存档，才有得还原
@@ -468,7 +443,7 @@ def proxy_on(service: str) -> int:
 
 
 def teardown(service: str) -> str:
-    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。stop 和回滚共用。
+    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。proxy off 和回滚共用。
 
     顺序要紧：networksetup 写地址会顺手把代理打开，所以必须先写地址、再关开关。"""
     had_state, original, servers = load_original_state(service)

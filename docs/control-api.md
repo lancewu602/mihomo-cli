@@ -37,15 +37,15 @@
 |---|---|---|
 | `src/mihomo_cli/core.py:342` `reload_config()` | `PUT /configs?force=true` | rules / geodata / sub 改完配置后热重载 |
 | `src/mihomo_cli/core.py:371` `controller_put()` | 任意 PUT | 写接口的统一封装（拿状态码，不解析 body） |
-| `src/mihomo_cli/status.py:149` | `GET /version` | 判断控制接口可用 |
-| `src/mihomo_cli/kernel.py:48` / `:70` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
-| `src/mihomo_cli/kernel.py:86` / `:96` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
+| `src/mihomo_cli/status.py:175` | `GET /version` | 判断控制接口可用 |
+| `src/mihomo_cli/kernel.py:52` / `:74` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
+| `src/mihomo_cli/kernel.py:90` / `:100` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
 | `src/mihomo_cli/groups.py:30` | `GET /proxies` | 列策略组 |
 | `src/mihomo_cli/groups.py:153` | `PUT /proxies/{名}` | `group <组> <编号>` 切节点 |
 | `src/mihomo_cli/groups.py:107` / `:173` | `GET /proxies/{名}/delay` | 逐个节点测速 |
 | `src/mihomo_cli/groups.py:91` | `GET {组}/healthcheck` | 订阅节点整批交给内核测 |
-| `src/mihomo_cli/subs.py:667` | `PUT /providers/proxies/{名}` | `sub update`：让内核立刻重拉订阅 |
-| `src/mihomo_cli/subs.py:1044` / `:1213` | `GET /version`、`GET /providers/proxies` | 判断内核在不在跑 |
+| `src/mihomo_cli/subs.py:688` | `PUT /providers/proxies/{名}` | `sub update`：让内核立刻重拉订阅 |
+| `src/mihomo_cli/subs.py:1065` / `:1252` | `GET /version`、`GET /providers/proxies` | 判断内核在不在跑 |
 
 ## 踩过的点
 

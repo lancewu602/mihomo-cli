@@ -26,16 +26,14 @@
 ## 命令
 
 ```
-kernel start|stop|restart   内核层（跨平台）：只动内核服务，不碰系统代理
-kernel stop --force        系统代理还指着内核时也照停（那些网卡上的应用会断网）
-proxy on|off|show [网卡名]  系统代理层（**仅 macOS**；Linux 下这个命令不注册）
-                          show 默认只看活跃那张，--all 列全部
-start [网卡名]              = kernel start + proxy on（Linux 上只有内核那半）
-stop [网卡名]               = proxy off 然后 kernel stop（顺序不能反）
+proxy on|off|show [网卡名]
+                         系统代理那一层：on 开、off 摘（并把绕过列表/原地址还原）、show 看现状
+                         （**仅 macOS**，Linux 下这个命令不注册）
+                         内核自己起：brew services start mihomo / sudo systemctl start mihomo
+                         show 默认只看活跃那张网卡，--all 列全部
 
 nics [网卡名]            列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
-restart [--keep-log]     重启内核服务让新配置生效；默认顺手清空日志
-status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性（默认动作）
+status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 订阅 / 出口 / 连通性（默认动作）
 
 sub list                 列出订阅：节点数、刷新间隔、挂在哪些组、本地缓存
 sub add <链接>            加订阅，自动挂到带 use: 的代理组
@@ -68,7 +66,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
-| [docs/lifecycle.md](docs/lifecycle.md) | 内核层与系统代理层怎么分、`start`/`stop` 的顺序不变式 |
+| [docs/lifecycle.md](docs/lifecycle.md) | 系统代理那一层怎么工作；内核为什么交给系统原生命令 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，
@@ -116,12 +114,12 @@ PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装，在仓库目�
 
 ```bash
 # macOS
-brew install mihomo && mihomo-cli start
+brew install mihomo && brew services start mihomo && mihomo-cli proxy on
 
 # Debian/Ubuntu（用官方 deb，自带 systemd unit，装完 /etc/mihomo/config.yaml 是极简默认配置）
 sudo dpkg -i mihomo-linux-amd64-*.deb
 sudo systemctl enable --now mihomo
-mihomo-cli sub add <订阅链接> && mihomo-cli start
+mihomo-cli sub add <订阅链接> && mihomo-cli proxy on
 ```
 
 > 源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，

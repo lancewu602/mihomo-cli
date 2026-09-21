@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""mihomo-cli —— 管 mihomo：内核服务、系统代理、订阅、规则、geodata 数据。
+"""mihomo-cli —— 管 mihomo：系统代理、订阅、规则、geodata 数据（内核服务交给系统原生命令）。
 
 包内入口（`mihomo_cli/cli.py`）：只管参数解析、子命令表和异常兜底，活都在各模块里。
 两个等价入口：`mihomo-cli`（装包后）/ `python3 -m mihomo_cli`（不装包）。
 
-不带参数 = status（只读）。内核和系统代理是两层，既能分开动，也能一条命令一起做：
+不带参数 = status（只读）。**内核服务由 brew services / systemctl 管**，本工具只读它的状态；
+自己动手的只有系统代理那一层（macOS 的 networksetup）：
 
-    kernel start|stop|restart     内核层（跨平台）：只碰内核服务，不动系统代理
-    proxy  on|off|show            系统代理层（仅 macOS）：只碰 networksetup 的开关
-    start [网卡名]                = kernel start + proxy on（Linux 上只有内核那半）
-    stop  [网卡名]                = proxy off 然后 kernel stop（顺序不能反）
-    restart [--keep-log]          = kernel restart（让新配置生效）；默认顺手清空日志
+    proxy on|off|show [网卡名]
+                      系统代理那一层：on 开、off 摘（并把原设置还原）、show 看现状。
+                      内核自己起（brew services start mihomo / systemctl start mihomo），本工具不代劳。
 
-    nics [网卡名]     列网卡（macOS 网络服务 / Linux 接口与路由）
-    status [网卡名]   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
+    nics [网卡名]     列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
+    status [网卡名]   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 订阅 / 出口 / 连通性
     logs   [--truncate]  内核日志在哪、多大；--truncate 清空
     group  [组名] [编号|选项 | --test]  策略组：列组 / 看选项 / 切换 / 测速（选项可报编号）
 
@@ -36,7 +35,7 @@ import argparse
 import os
 import sys
 
-from .compose import cmd_kernel, cmd_proxy, cmd_restart, cmd_start, cmd_stop
+from .compose import cmd_proxy
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .geodata import FILE_NAMES, MIRRORS, cmd_geodata
 from .groups import cmd_group
@@ -48,47 +47,44 @@ from .subs import cmd_sub
 
 # ─────────────────────────── 入口 ───────────────────────────
 
-# start / stop 的说明也按平台写：Linux 上没有系统代理那层，帮助里就别提 proxy
-if IS_MACOS:
-    START_HELP, STOP_HELP = "= kernel start + proxy on", "= proxy off + kernel stop（顺序不能反）"
-else:
-    START_HELP = "启动内核服务（systemd）；系统代理那层是 macOS 专有"
-    STOP_HELP = "停内核服务（systemd）"
-
 SUBCOMMANDS = {
     "nics": ("列网卡（macOS 网络服务 / Linux 接口与路由）", cmd_nics),
     "geodata": ("geodata 数据文件：list / download / apply", cmd_geodata),
     "group": ("策略组：列组 / 看选项 / 切换 / 测速", cmd_group),
-    "kernel": ("内核层：start / stop / restart（不碰系统代理）", cmd_kernel),
     "logs": ("看内核日志在哪、多大；--truncate 清空", cmd_logs),
     "proxy": ("系统代理层：on / off / show（macOS）", cmd_proxy),
     "rules": ("规则树：sync 同步片段 / diff 对比 / apply 落地 / rollback 回滚", cmd_rules),
     "sub": ("订阅：add 加 / list 列 / nodes 看节点 / update 刷在用的 / rm 删", cmd_sub),
-    "start": (START_HELP, cmd_start),
-    "stop": (STOP_HELP, cmd_stop),
-    "restart": ("= kernel restart（让新配置生效）；顺手清空日志", cmd_restart),
     "status": ("查看当前状态（默认）", cmd_status),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics", "subs": "sub"}
 
-# 只有 macOS 才有的子命令（系统代理层靠 networksetup）。
-# Linux 上干脆不注册：--help 里挂着一个用不了的命令，比没有更让人困惑。
+# 只有 macOS 才有的子命令：系统代理层靠 networksetup，proxy 就是这一层的命令。
+# Linux 上没有这一层，干脆不注册：--help 里挂着一个用不了的命令，比没有更让人困惑。
 MACOS_ONLY = {"proxy"}
 if not IS_MACOS:
     for _name in MACOS_ONLY:
         SUBCOMMANDS.pop(_name, None)
+
+# 已经删掉的命令：给一句人话 + 现在该用什么，而不是 argparse 的 invalid choice
+REMOVED = {
+    "kernel": "内核服务交给系统管了：brew services start|stop|restart mihomo"
+    "（Linux 上是 sudo systemctl start|stop|restart mihomo）；本工具只读它的状态（mihomo-cli status）",
+    "restart": "重启内核用原生命令：brew services restart mihomo"
+    "（Linux 上是 sudo systemctl restart mihomo）；想清空日志用 mihomo-cli logs --truncate",
+    "start": "改叫 mihomo-cli proxy on（只开系统代理；内核用 brew services start mihomo 起）",
+    "stop": "改叫 mihomo-cli proxy off（只摘系统代理，不动内核）",
+}
 
 # 这些子命令不收"网卡名"这个位置参数
 NO_SERVICE_ARG = {
     cmd_nics,
     cmd_rules,
     cmd_sub,
-    cmd_restart,
     cmd_geodata,
     cmd_logs,
     cmd_group,
-    cmd_kernel,
     cmd_proxy,  # 它的每个动作自带 网卡名（放在动作后面）
 }
 
@@ -114,10 +110,13 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str] | None = None) -> int:
     # 手敲了 macOS 专有的命令：给一句人话，而不是 argparse 那句 invalid choice
     raw = sys.argv[1:] if argv is None else list(argv)
-    if raw and not IS_MACOS and ALIASES.get(raw[0], raw[0]) in MACOS_ONLY:
+    first = ALIASES.get(raw[0], raw[0]) if raw else ""
+    if hint := REMOVED.get(first):
+        die(f"{raw[0]} 已经删掉了。{hint}")
+    if raw and not IS_MACOS and first in MACOS_ONLY:
         die(
-            f"{raw[0]} 只在 macOS 上可用：系统代理靠 macOS 的 networksetup，Linux 上没有这一层。\n"
-            f"  Linux 上内核那半用：mihomo-cli kernel start|stop|restart（start / stop 也行）\n"
+            f"{first} 只在 macOS 上可用：系统代理靠 macOS 的 networksetup，Linux 上没有这一层。\n"
+            f"  内核服务用原生命令：sudo systemctl start|stop|restart mihomo\n"
             f"  shell 里的 http_proxy / https_proxy 看：mihomo-cli nics\n"
             f"  想让整机流量走内核：用 mihomo 的 TUN（config.yaml 的 tun:）"
         )
@@ -126,11 +125,14 @@ def _main(argv: list[str] | None = None) -> int:
         # epilog 是手工排的多行，用 Raw 格式化器，别让 argparse 把换行折掉
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="管 mihomo：内核服务、系统代理、订阅、规则、geodata 数据",
+        # epilog 按平台生成：Linux 上没有系统代理那层，就别提 start
         epilog=(
-            "常用：start 起内核（macOS 上顺带开系统代理）；rules sync --from <clone> → rules diff → apply；\n"
-            "sub add <链接>；geodata download → geodata apply。\n"
+            "常用：sub add <链接> → rules apply；"
+            + ("proxy on 开系统代理；" if IS_MACOS else "内核服务用 sudo systemctl；")
+            + "\n"
+            "geodata download → geodata apply；rules sync --from <clone> → rules diff → apply。\n"
             "完整说明见文件头 docstring（python3 -m pydoc mihomo_cli.cli）；\n"
-            "设计说明在仓库 docs/（控制接口 / 打包 / 交互界面）。"
+            "设计说明在仓库 docs/（控制接口 / 生命周期 / 打包）。"
         ),
     )
     sub = parser.add_subparsers(dest="action")
@@ -187,19 +189,6 @@ def _main(argv: list[str] | None = None) -> int:
                 help="切到哪个：选项编号（看 group <组名> 那列）或名字的一段",
             )
             p.add_argument("--test", action="store_true", help="触发测速，按延迟排序")
-        if fn is cmd_kernel:
-            ksub = p.add_subparsers(dest="kernel_action")
-            ksub.add_parser("start", help="没在跑就交给服务管理器拉起，等端口就绪")
-            ks = ksub.add_parser("stop", help="停内核服务（系统代理还指着它时会拒绝）")
-            ks.add_argument(
-                "--force",
-                action="store_true",
-                help="明知系统代理还指着它也照停（那些网卡上的应用会断网）",
-            )
-            kr = ksub.add_parser("restart", help="重启内核服务，让新配置立刻生效")
-            kr.add_argument(
-                "--keep-log", action="store_true", help="保留旧日志（默认重启前清空，免得越滚越大）"
-            )
         if fn is cmd_proxy:
             psub = p.add_subparsers(dest="proxy_action")
             # 网卡名放在动作后面（proxy on "Wi-Fi"）：动作才是这个命令的动词，
@@ -212,11 +201,7 @@ def _main(argv: list[str] | None = None) -> int:
             po = psub.add_parser("on", help="开系统代理（要求内核已在监听）")
             po.add_argument("name", nargs="?", metavar="网卡名", help="默认用当前活跃那张")
             pf = psub.add_parser("off", help="关系统代理，并把原设置还原回去")
-            pf.add_argument("name", nargs="?", metavar="网卡名", help="默认关掉之前 start 过的")
-        if fn is cmd_restart:
-            p.add_argument(
-                "--keep-log", action="store_true", help="保留旧日志（默认重启前清空，免得越滚越大）"
-            )
+            pf.add_argument("name", nargs="?", metavar="网卡名", help="默认关掉之前开过代理的")
         if fn is cmd_logs:
             p.add_argument("--truncate", action="store_true", help="清空日志文件（内核不用重启）")
         if fn is cmd_geodata:

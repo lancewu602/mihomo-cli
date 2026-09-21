@@ -29,7 +29,7 @@ def all_groups() -> dict[str, dict]:
     """{组名: 详情}。这命令没有离线可看的东西，连不上就直接报错。"""
     data = api("/proxies")
     if not data:
-        die("连不上内核的控制接口，读不到策略组。先 mihomo-cli start")
+        die("连不上内核的控制接口，读不到策略组。先看内核在没在跑：mihomo-cli status")
     return {k: v for k, v in (data.get("proxies") or {}).items() if v.get("type") in GROUP_TYPES}
 
 

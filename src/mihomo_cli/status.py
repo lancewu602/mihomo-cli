@@ -23,9 +23,8 @@ from .core import (
     size_str,
     warn,
 )
-from .kernel import current_node, mihomo_pid, probe
+from .kernel import current_node, mihomo_pid, probe, service_status
 from .logs import find_log_file
-from .service import service_status
 from .subs import provider_overview
 from .systemproxy import active_service, list_services, match_service, proxy_states
 
@@ -213,7 +212,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         # 只看选中的这张不够：别的网卡上可能还开着代理，看漏了会莫名其妙
         others = [n for n in opened if n != service]
         if others:
-            line("其它网卡", warn("还开着代理：" + "、".join(others) + "（mihomo-cli stop 可关）"))
+            line(
+                "其它网卡",
+                warn("还开着代理：" + "、".join(others) + "（mihomo-cli proxy off 可关）"),
+            )
 
     info_block()
 

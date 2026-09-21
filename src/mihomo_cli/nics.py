@@ -13,7 +13,7 @@ import struct
 from pathlib import Path
 
 from .core import IS_MACOS, bad, dim, ok, pad, warn, width
-from .service import service_status
+from .kernel import service_status
 from .systemproxy import active_service, list_services, proxy_states, proxy_summary, require_macos
 
 # ───────────── Linux：网卡与代理现状（nics 用）─────────────
@@ -176,7 +176,7 @@ def cmd_nics(_: argparse.Namespace) -> int:
     require_macos("nics", "它列的是 networksetup 的网络服务")
     services = list_services()
     states = proxy_states(services)  # 一次读回（plist 优先），别在循环里逐张问
-    print(dim("macOS 网卡（start / stop 的参数就是下面的名字，带空格要加引号）"))
+    print(dim("macOS 网卡（proxy on/off 的参数就是下面的名字，带空格要加引号）"))
     print()
     print(f"    {pad('网卡', 22)}{pad('设备', 10)}{pad('状态', 14)}系统代理")
     for s in services:
@@ -199,5 +199,5 @@ def cmd_nics(_: argparse.Namespace) -> int:
         print(dim(f"不传网卡名时用 ● 那张：{auto['name']}"))
     else:
         print(warn("当前没有活跃网卡（没默认路由），start 不传网卡名会直接失败"))
-    print(dim('例：mihomo-cli start "USB 10/100 LAN"'))
+    print(dim('例：mihomo-cli proxy on "USB 10/100 LAN"'))
     return 0

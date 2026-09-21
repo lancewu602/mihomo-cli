@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import time
 import urllib.request
@@ -14,9 +16,11 @@ from pathlib import Path
 from .core import (
     HOST,
     PROBE_TIMEOUT,
+    SERVICE_NAME,
     TEST_URL,
     api,
     run,
+    service_manager,
 )
 
 # ─────────────────────────── 内核状态查询 ───────────────────────────
@@ -138,3 +142,81 @@ def probe(port: int) -> tuple[bool, str]:
         return code == 204, f"{code} in {(time.time() - t0) * 1000:.0f}ms"
     except Exception as e:  # 探测失败的原因太多，一律降级成一行提示
         return False, f"{type(e).__name__}: {e}"
+
+
+# ─────────────── 内核服务状态（只读）───────────────
+#
+# 启停内核服务是系统原生命令的事（brew services / systemctl），本工具不再代劳；
+# 这里只回答 status 要显示的两个问题：谁在管、服务现在是不是在跑。
+#
+# 注意别为了拿状态去跑 `brew services list`（1.8s，它把**所有**服务都查一遍再格式化）；
+# 我们要的只是内核这一个 job，launchctl 一问就有（0.01s，实测快 180 倍）。
+
+BREW_LABEL = "homebrew.mxcl.mihomo"  # brew services 给内核起的 job 名
+BREW_PLISTS = (  # 用户级（brew services）与系统级（sudo brew services）
+    Path.home() / f"Library/LaunchAgents/{BREW_LABEL}.plist",
+    Path(f"/Library/LaunchDaemons/{BREW_LABEL}.plist"),
+)
+
+
+def _brew_state_from_list() -> str:
+    """兜底：解析 `brew services list`（1.8s）。只在拿不到 launchctl 时用。"""
+    p = run("brew", "services", "list")
+    if p.returncode != 0:
+        return "unknown"
+    for line in p.stdout.splitlines():
+        fields = line.split()
+        if fields and fields[0] == SERVICE_NAME:
+            state = fields[1] if len(fields) > 1 else "unknown"
+            if state in ("started", "scheduled"):
+                return "running"
+            if state in ("stopped", "none"):
+                return "stopped"
+            return state  # error 之类原样透出去，别吞
+    return "unknown"
+
+
+def brew_service_state() -> str:
+    """只问内核这一个 job 的状态，返回 running / stopped / none / error。
+
+    为什么不直接 `brew services list`：它把**所有**服务都查一遍并格式化，实测 1.8s；而我们要的
+    信息 launchctl 一问就有，实测 0.01s（快 180 倍）。语义对齐 brew 的说法：
+
+      running  job 加载着且在跑
+      error    job 加载着但没在跑（崩了/退出了；brew 把这个也叫 error）
+      stopped  装了（plist 在）但没加载
+      none     压根没装成服务
+
+    注：brew 还会报 scheduled（plist 里有 StartInterval），内核是常驻 daemon，不适用；
+    真要支持，读 plist 里有没有 Start*Interval 就行（这里没做）。
+    """
+    if shutil.which("launchctl"):  # 正常路径：0.01s
+        uid = os.getuid()
+        for domain in (f"gui/{uid}", "system"):  # 用户级；sudo brew services 装在 system
+            p = run("launchctl", "print", f"{domain}/{BREW_LABEL}")
+            if p.returncode == 0:
+                return "running" if re.search(r"^\s*state = running", p.stdout, re.M) else "error"
+        return "stopped" if any(plist.exists() for plist in BREW_PLISTS) else "none"
+    return _brew_state_from_list()  # 没有 launchctl 的怪环境，退回慢的那条
+
+
+def service_status() -> tuple[str, str]:
+    """内核服务的状态：返回 (状态, 谁管的)。"""
+    mgr = service_manager()
+    if mgr is None:
+        return "", ""
+    kind, label = mgr
+    if kind == "brew":
+        state = brew_service_state()
+        if state == "running":
+            return "running", label
+        if state in ("stopped", "none"):
+            return "stopped", label
+        return state, label  # error / unknown 原样透出去，别吞
+    p = run("systemctl", "is-active", SERVICE_NAME)
+    state = p.stdout.strip() or "unknown"
+    if state == "active":
+        return "running", label
+    if state in ("inactive", "failed", "unknown"):
+        return "stopped", label
+    return state, label
