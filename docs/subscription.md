@@ -135,8 +135,6 @@ geodata-mode: true            # ← GEOIP 走 geoip.dat（跟下面 geox-url 是
 geox-url:
   geosite: "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
   geoip:   "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
-  mmdb:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb"
-  asn:     "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"
 profile:
   store-selected: true        # 选中的节点写进 cache.db，重启后还是它（`sub use` 靠这个）
 ```
@@ -206,7 +204,7 @@ profile:
 - **插入时会跟已有项对齐缩进**：同一个 YAML 序列里混缩进（比如已有组/规则是 4 空格、工具插的
   是 2 空格）会让整份配置**直接解析失败**——实测踩过，现在按已有项量出来的缩进走。
 
-#### 为什么四项 geox-url 都要换掉，以及为什么 geosite/geoip 用 v2ray-rules-dat
+#### 为什么 geox-url 只写 geosite / geoip 两项（且都换源）
 
 `GEOSITE` 规则要用 `GeoSite.dat`，而它的**默认下载源是 github.com**。实测（国内直连）：
 
@@ -220,7 +218,8 @@ dial tcp 20.205.243.166:443: connect: operation timed out
 `sub set` 会被自己的校验挡回来（写完 → 校验失败 → 回滚），规则根本装不进去。换成 jsdelivr 镜像后
 实测 5.8 秒下完（11.1 MB）、`Finished initial GeoSite rule cn => DIRECT, records: 111177`。
 
-**另外三项（`geoip` / `mmdb` / `asn`）的默认源同样是 github.com**，不是 jsdelivr。
+**另外三项（`geoip` / `mmdb` / `asn`）的默认源同样是 github.com**，不是 jsdelivr
+（我们只写前两项；后两项为什么不用，见下面“`mmdb` / `asn` 两项不写”那段）。
 内核 `DefaultRawConfig`（v1.19.31 源码）里四个 URL 全是
 `https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/…`；手册 general 那页
 `geox-url` 代码块里写的 jsdelivr 地址是**示例值**。实测（不给 `geox-url`、规则里放一条
@@ -232,13 +231,12 @@ TCP 172.25.56.20:49637->20.205.243.166:443  (ESTABLISHED)   # github.com
 TCP 172.25.56.20:49676->185.199.109.133:443 (SYN_SENT)      # objects.githubusercontent.com，卡死
 ```
 
-所以四项一起换。为什么不能只换 geosite 关键在 `geo-auto-update`：它按 geodata 的 enable 情况
+所以两项一起换。为什么不能只换 geosite 关键在 `geo-auto-update`：它按 geodata 的 enable 情况
 **并发**刷 GeoSite / MMDB / ASN（`component/updater/update_geo.go` 的 `updateGeoDatabases()`），
 各走各的 `geox-url`。骨架现在只有 `GEOSITE` 规则 → 只有 geosite 被 enable，所以只换 geosite
 也不会马上出事；但用户按上面那段建议加一条 `GEOIP,CN` 之后，24 小时的 tick 就去撞 github 了。
-实测四个镜像都能下：`geosite.dat` 11.1 MB、`geoip.dat` 16.9 MB（`GEOIP,telegram` 触发，下完
-`records: 12`）、`geoip.metadb` 8.5 MB、`ASN.mmdb` 12.1 MB（`IP-ASN,15169,DIRECT` 规则实测触发
-下载，6 秒完）——四项都在内核里真的被加载过（`mihomo -t` 与启动日志无报错）。
+实测两份都能下：`geosite.dat` 11.1 MB、`geoip.dat` 16.9 MB（`GEOIP,telegram` 触发，下完
+`records: 12`）——两项都在内核里真的被加载过（`mihomo -t` 与启动日志无报错）。
 
 **为什么 `geosite` / `geoip` 指向 Loyalsoldier/v2ray-rules-dat**（而不是 MetaCubeX 那份）：
 
@@ -261,23 +259,36 @@ TCP 172.25.56.20:49676->185.199.109.133:443 (SYN_SENT)      # objects.githubuser
 sha256 都是 `f3370cf391831bb0…`，说明这份数据本来就是同一个产物）。缓存下来之后
 `mihomo -t` 实测 0.31 秒。
 
-`mmdb` 用的是 `geoip.metadb`（不是 `country.mmdb`）：内核默认那个 URL 指的就是这个文件，
-只换主机名不换东西；而且**只在把 `geodata-mode` 改回 `false` 时才轮到它**，留着是为了不回落
-内核默认那个 github URL。
+`mmdb` / `asn` 两项**不写**——骨架用不上它们，实测三种情形都没碰过：
 
-`asn` 那份 `GeoLite2-ASN.mmdb`：**MetaCubeX 是提供的**（它 release 分支里有，之前我们漏看了），
-而且手册 `geox-url` 示例里那个 `xishang0128/geoip` 源跟它**逐字节相同**（12,103,050 字节，
-sha256 都是 `7dcc428e82ef1e95…`，我把两份都下下来算过），但 MetaCubeX 那份更新更快
-（2026-09-21 08:21 vs 09-17），所以指 MetaCubeX、少一个第三方仓库。
+| 情形 | `mihomo -t` 结果 | 实际下载的文件 |
+|---|---|---|
+| 骨架本身（没有 GEOIP 规则） | ✓ | 只有 `GeoSite.dat` |
+| 用户自己加一条 `GEOIP,CN` | ✓ | `GeoSite.dat` + `GeoIP.dat` |
+| 再加 `dns.fallback-filter: {geoip: true}` | ✓ | `GeoSite.dat` + `GeoIP.dat`（**mmdb 仍未被碰**） |
 
-`geox-url` 节如果已经存在，工具**缺哪个子键补哪个、已有的一个字节不碰**；整节是流式写法
-（`geox-url: {…}`）时跳过并说一声。这一条是给老版本写的配置留的路：0.1.x 只覆盖过
-`geosite`，要是按「整节存在就整节跳过」处理，升级后那三项永远补不上。
+道理是 `geodata-mode: true` 已经把 GEOIP 的数据源定成了 `geoip.dat`；`asn` 那份只有 `IP-ASN,15169`
+这类规则才要（实测加上才触发那 12.1 MB 下载），骨架没有这类规则。代价是留了个口子：
+谁日后把 `geodata-mode` 改回 `false`、或者加一条 `IP-ASN` 规则，内核会回落默认那个 github URL。
+真要用了自己把两行加回去就行（地址见 `subs.py` 里那段注释）。
+
+顺带两个走过的事实（当时也在这两项上绕过弯）：
+
+- `mmdb` 那个文件是 `geoip.metadb`，不是 `country.mmdb`——内核默认 URL 指的就是它；
+- `asn` 那份 `GeoLite2-ASN.mmdb`：**MetaCubeX 提供**（release 分支里有），而且手册 `geox-url`
+  示例里那个 `xishang0128/geoip` 源跟它**逐字节相同**（12,103,050 字节，sha256 都是
+  `7dcc428e82ef1e95…`，两份都下下来算过）。现在两项都不写了，这个结论只存着备用。
+
+`geox-url` 节如果已经存在，工具**缺哪个子键补哪个、已有的一个字节不碰**（更不会删键）：
+整节是流式写法（`geox-url: {…}`）时跳过并说一声。所以老配置里已经写好的 `mmdb:` / `asn:`
+两行会**原样留着**，不会被这次改动抹掉。这一条是给老版本写的配置留的路：0.1.x 只覆盖过
+`geosite`，要是按「整节存在就整节跳进」处理，升级后 `geoip` 永远补不上。
 
 **换源对老配置不生效（有意如此）**：已有的 `geosite: …` 不会被改写成新地址——工具的原则是
-「已有的值一律不碰」。所以从上一个版本升上来的配置会保留 MetaCubeX 那份 `geosite.dat`
-（广告表就还是 911 条）。想拿到上表那份 190k 的广告表，两个办法：把 `geox-url` 那一节删了再
-`sub set`（会按新源整节补全），或者自己把 `geosite` / `geoip` 两行改成上面的地址。
+「已有的值一律不碰」（也**不删键**，所以老配置里的 `mmdb:` / `asn:` 会留着）。所以从上一个
+版本升上来的配置会保留 MetaCubeX 那份 `geosite.dat`（广告表就还是 911 条）。想拿到上表那份
+190k 的广告表，两个办法：把 `geox-url` 那一节删了再 `sub set`（会按新源整节补全），
+或者自己把 `geosite` / `geoip` 两行改成上面的地址。
 
 **那老配置什么时候才会真被补上？** 同一个链接再跑一次 `sub set` 就会——这是「链接没变」
 那条路上**唯一会写盘**的情形（下面详说）：把缺的全局键和缺的规则都补上。反过来说，
@@ -362,11 +373,10 @@ unified-delay: true
 tcp-concurrent: true
 geo-auto-update: true
 geo-update-interval: 24
+geodata-mode: true
 geox-url:
-  geosite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
-  geoip: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
-  mmdb: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb"
-  asn: "https://testingcf.jsdelivr.net/gh/xishang0128/geoip@release/GeoLite2-ASN.mmdb"
+  geosite: "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+  geoip: "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
 profile:
   store-selected: true
 
@@ -504,7 +514,8 @@ networksetup 还会让人以为工具动了系统设置。
   也能把 `cn.mrs`（538484 字节）下全并命中。所以骨架用的是 `GEOSITE`、不引 rule-provider。
 - **`geo-auto-update` 每天刷的是「enable 的那几份」**：骨架上只有 `GEOSITE` 规则时只刷
   `geosite.dat`（11.1 MB）；用户自己加一条 `GEOIP,CN` 之后 `geoip.dat`（16.9 MB）也跟着刷
-  ——四项 `geox-url` 一起写就是因为这个（迟早都要下，不如一开始就指向同一家）。
+  ——两项一起写就是因为这个（迟早都要下，不如一开始就指向同一家）。`mmdb` / `asn` 骨架不用，
+  也就不会下（见上面对照表）。
 
 - **`sub set` 会先自己拉一遍再写**（`_preflight()`），UA 用 `clash-verge/v2.4.7`（机场普遍按 UA
   发配置），并且**刻意不认 `http_proxy` / `https_proxy`**：设订阅时本机可能正因为代理还没配好

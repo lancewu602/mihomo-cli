@@ -54,8 +54,8 @@ sub set <链接>           设置订阅链接（**只支持一个**）：没设�
                          `GEOSITE,cn,DIRECT`）+ 兜底 `MATCH,节点选择`、以及
                          九个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
                          `external-controller` / `unified-delay` / `tcp-concurrent` /
-                         `geodata-mode: true` / geodata 自动更新两项，以及四项 `geox-url`：
-                         geosite / geoip 走 Loyalsoldier/v2ray-rules-dat，mmdb / asn 走 MetaCubeX、
+                         `geodata-mode: true` / geodata 自动更新两项，以及两项 `geox-url`
+                         （geosite / geoip 都走 Loyalsoldier/v2ray-rules-dat）、
                          `profile.store-selected`）；
                          链接变了就把旧的整块丢掉、新的全量接管，链接没变则一个字节都不改、
                          只让内核重拉节点（唯一的例外：老配置里缺的全局设置和规则会补上——
@@ -119,8 +119,8 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
   只动 `proxy-providers` 里的 `airport`、引用它的组，以及**缺失时才补**的那几条（分流规则、
   兜底 MATCH、那几项全局设置）；你已经写过的组、规则、设置一律不碰——全局设置里已有的
   **顶层键**不动，`geox-url` / `profile` 这种嵌套节则是**缺哪个子键补哪个**（升级前只写了
-  `geox-url.geosite` 的配置，会在下次写配置时补上 `geoip` / `mmdb` / `asn`）。
-- 内核目录里的数据文件（`GeoSite.dat` 11.1 MB、`geoip.dat` 16.9 MB、`geoip.metadb` 8.5 MB 等）
+  `geox-url.geosite` 的配置，会在下次写配置时补上 `geoip`；已有的 `mmdb` / `asn` 两行不会被删掉）。
+- 内核目录里的数据文件（`GeoSite.dat` 11.1 MB、`geoip.dat` 16.9 MB 等）
   **由内核自己下载和维护**，工具不装也不删它们；`GeoSite.dat` 在写完规则跑 `mihomo -t` 校验时
   就会下下来（实测 5.8 秒；有 `GEOIP` 规则时还会下 `geoip.dat`）。
 

@@ -144,8 +144,7 @@ GLOBAL_SCALARS = (
     # .dat（11.1 + 16.9 MB），比 mmdb 那套（4.2 + 8.5 MB）多一点——数据更全的代价。
     ("geodata-mode", "true"),
 )
-# 数据文件的下载源 —— **geosite / geoip 以 Loyalsoldier/v2ray-rules-dat 为准**，mmdb / ASN
-# 两份它不提供，继续指 MetaCubeX 的镜像（理由在各自变量的注释里）。
+# 数据文件的下载源 —— 只写 geosite / geoip 两项，都指 Loyalsoldier/v2ray-rules-dat。
 #
 # **内核 DefaultRawConfig 里四项全是 github.com**（v1.19.31 实测：不写
 # geox-url 时内核去连 20.205.243.166:443 也就是 github，302 之后超时；同一时刻还有一条
@@ -164,24 +163,26 @@ GLOBAL_SCALARS = (
 #     `icloud` 53、`steam@cn` 17、`category-games@cn` 38、`win-spy` 327、`win-update` 364。
 # 代价：首次 `mihomo -t` 要下 11.1 MB（实测 5.8 秒；有 GEOIP 规则时再加 16.9 MB 的
 # geoip.dat，7.8 秒），之后启动 279ms。
-# 为什么四项一起写：`geo-auto-update` 打开后，内核按 geodata 的 enable 情况**并发**刷
+# 为什么两项一起写：`geo-auto-update` 打开后，内核按 geodata 的 enable 情况**并发**刷
 # GeoSite / MMDB / ASN（component/updater/update_geo.go 的 updateGeoDatabases），各走各的
 # geox-url——只换 geosite 的话，用户按文档建议加一条 `GEOIP,CN` 之后，24 小时的 tick 就
-# 去撞 github 了。四份实测都能下：geosite 11.1 MB / geoip 16.9 MB / geoip.metadb 8.5 MB /
-# ASN.mmdb 12.1 MB（`IP-ASN,15169` 规则实测触发下载，6 秒完）。
+# 去撞 github 了。
+#
+# **为什么 `mmdb:` / `asn:` 两项不写**（实测过三种情形）：
+#   · `mmdb`：骨架写了 `geodata-mode: true`（见 GLOBAL_SCALARS），GEOIP 规则读的就是
+#     `geoip.dat`，mmdb 没人用；实测骨架本身、`GEOIP,CN`、以及开了
+#     `dns.fallback-filter: {geoip: true}` 三种情况下，都只下 GeoSite.dat / GeoIP.dat，
+#     mmdb 一次也没被碰过（`-t` 也都通过）。
+#   · `asn`：只有 `IP-ASN,15169` 这类规则要它，骨架没有；实测加一条才触发那 12.1 MB 下载。
+# 代价就是留了个口子：谁日后把 `geodata-mode` 改回 false、或者加一条 `IP-ASN` 规则，内核会
+# 回落默认那个 github URL（下载必挂）。真要用了，自己把那两行加回 geox-url 就行，地址：
+#   mmdb: .../MetaCubeX/meta-rules-dat@release/geoip.metadb
+#   asn:  .../MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb
+# （v2ray-rules-dat 那个仓库不提供这两份：它的 release 分支全清单只有 geoip.dat、geosite.dat
+# 加一堆 .txt——全是**纯域名一行一条**的明文，没有 v2ray 的 `full:`/`domain:` 前缀，理论上能
+# 当 `behavior: domain` 的 rule-provider，但 geosite.dat 里已经打包了同样的内容，没必要。）
+# 工具**不删已有的键**：老配置里已经写好的 `mmdb:` / `asn:` 两行会原样留着，不会被抹掉。
 GEOX_MIRROR = "https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release"
-# mmdb / ASN 这两份 v2ray-rules-dat 不提供：它的 release 分支全清单只有 geoip.dat、geosite.dat
-# 加一堆 .txt（direct-list / proxy-list / reject-list / china-list / apple-cn / google-cn /
-# gfw / win-spy / win-update / win-extra，都是**纯域名一行一条**的明文，没有 v2ray 的
-# `full:`/`domain:` 前缀——理论上能当 `behavior: domain` 的 rule-provider，但 geosite.dat
-# 里已经打包了同样的内容，没必要）。所以这两项继续用 MetaCubeX 的镜像：
-#   · `mmdb:` 只在 `geodata-mode: false` 时才被 GEOIP 规则用到——留它是为了用户把手改回去
-#     时不至于回落内核默认那个 github URL；
-#   · `asn:` 是 `IP-ASN,15169` 这类规则要的，12,103,050 字节、sha256 `7dcc428e…`，**和手册
-#     示例里那个 xishang0128/geoip 源逐字节相同**（下载下来算过），但 MetaCubeX 更新更快
-#     （2026-09-21 08:21 vs 09-17），所以指 MetaCubeX、少一个第三方仓库。
-GEOX_META = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release"
-GEOX_ASN = f"{GEOX_META}/GeoLite2-ASN.mmdb"
 # 要补的嵌套块（顶层键 + 节里的行）。值写成最终文本：URL 要引号，布尔值不能引（引了就成了字符串）。
 GLOBAL_BLOCKS = (
     (
@@ -189,10 +190,6 @@ GLOBAL_BLOCKS = (
         (
             f'geosite: "{GEOX_MIRROR}/geosite.dat"',
             f'geoip: "{GEOX_MIRROR}/geoip.dat"',
-            # mmdb 用 MetaCubeX 的 geoip.metadb：v2ray-rules-dat 不提供 mmdb，而这项只在把
-            # `geodata-mode` 改回 false 时才轮到它。内核默认那个 URL 指的就是这个文件。
-            f'mmdb: "{GEOX_META}/geoip.metadb"',
-            f'asn: "{GEOX_ASN}"',
         ),
     ),
     # store-selected：把「API 对策略组的选择」存进 cache.db，**重启后仍然是这个选中**，
@@ -715,7 +712,7 @@ def _ensure_globals(lines: list[str]) -> tuple[list[str], bool]:
     说明那半边跟 _ensure_group/_ensure_rules 一个风格，每条自己带前缀；**已有的值一律不碰**。
 
     见 GLOBAL_SCALARS / GLOBAL_BLOCKS：运行模式、日志级别、IPv6、控制接口、统一延迟、
-    TCP 并发、geodata 自动更新、geodata 模式、geox-url 四个下载源、profile.store-selected。
+    TCP 并发、geodata 自动更新、geodata 模式、geox-url 两个下载源、profile.store-selected。
     其中只有 `geox-url`（默认源 github.com，连 `mihomo -t` 都会被卡住）、`geodata-mode`
     （默认 false，不开的话 geox-url 里换的 geoip.dat 不生效）和 `external-controller`
     （内核默认不监听，本工具一半的命令靠它）是内核默认值做不到的；其余是默认值或口味项，
