@@ -84,7 +84,7 @@ def cmd_status(_: argparse.Namespace) -> int:
             line("日志", warn(f"{where}  级别 {level}"))
 
     # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样。
-    # 只看走默认路由那张（active_service 刻意不猜）；要看别的网卡用 proxy status --all。
+    # 只看走默认路由那张（active_service 刻意不猜）；要看别的网卡用 mihomo-cli nics。
     services: list[dict] = []
     svc: dict | None = None
     if IS_MACOS:
@@ -166,7 +166,7 @@ def cmd_status(_: argparse.Namespace) -> int:
         if others:
             line(
                 "其它网卡",
-                warn("还开着代理：" + "、".join(others) + "（mihomo-cli proxy stop 可关）"),
+                warn("还开着代理：" + "、".join(others) + "（mihomo-cli stop 会先摘代理）"),
             )
 
     log_line()

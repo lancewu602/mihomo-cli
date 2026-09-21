@@ -1,4 +1,4 @@
-"""地基：常量、路径探测、输出小工具、跑外部命令、读 config.yaml、调控制接口。
+"""地基：常量、路径探测、输出小工具、跑外部命令、config.yaml 的读写、调控制接口。
 
 所有子命令都依赖它；它自己不认识任何子命令。
 """
@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -25,7 +26,20 @@ FALLBACK_PORT = 7890  # 配置文件读不到时的兜底端口
 
 # 系统代理开关靠 networksetup，只有 macOS 有；Linux 上内核服务走 systemd。
 IS_MACOS = sys.platform == "darwin"
-SERVICE_HINT = "brew services start mihomo" if IS_MACOS else "systemctl start mihomo"
+
+
+def service_hint(action: str) -> str:
+    """该用哪条原生命令做这件事（出错时打给用户看的那种）。
+
+    sudo 只加在 Linux 的 systemctl 上：systemd 的 system unit 属主是 root，不加 sudo 必然被拒；
+    macOS 的 brew services 自己会报「得用 sudo brew services」，不用我们猜。
+    命令里的服务名跟 SERVICE_NAME 是同一个值（那个常量在下面才定义，这里先用字面量）。
+    """
+    return f"brew services {action} mihomo" if IS_MACOS else f"sudo systemctl {action} mihomo"
+
+
+SERVICE_HINT = service_hint("start")  # 内核没在监听时，引导用户去起它
+RESTART_HINT = service_hint("restart")  # 改完配置让它生效
 
 # 配置目录候选：第一个含 config.yaml 的胜出（macOS 是 brew 的 /opt/homebrew/etc/mihomo，
 # Linux 常见 /etc/mihomo）。
@@ -170,6 +184,21 @@ def run(*cmd: str) -> subprocess.CompletedProcess:
         return subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: command not found")
+
+
+def http_get(url: str, timeout: float = 15.0, limit: int = 0, ua: str = "mihomo-cli") -> bytes:
+    """直连下载一个 URL。异常原样抛出（调用方翻译成人话）；超过 limit 抛 ValueError。
+
+    刻意不认 http_proxy / https_proxy：设订阅时本机可能正因为代理还没配好而上不了网，
+    走环境变量里那个代理会绕回自己。真拉不通时调用方有 --force 可以跳过。
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(url, headers={"User-Agent": ua})
+    with opener.open(req, timeout=timeout) as r:
+        data = r.read(limit + 1) if limit else r.read()
+    if limit and len(data) > limit:
+        raise ValueError(f"内容超过 {size_str(limit)}，已中止")
+    return data
 
 
 def read_config(key: str) -> str | None:
@@ -319,6 +348,157 @@ def api(path: str) -> dict | None:
     """调 mihomo 的 REST API。任何异常都返回 None——status 不该因为内核没起来就崩掉。"""
     status, data = api_raw(path)
     return data if status == 200 else None
+
+
+def controller_put(path: str, timeout: float = 30) -> int:
+    """往控制接口发一个 PUT，返回 HTTP 状态码（连不上给 0），绝不抛异常。"""
+    controller = read_config("external-controller") or f"{HOST}:9090"
+    req = urllib.request.Request(f"http://{controller}{path}", method="PUT")
+    if secret := read_config("secret"):
+        req.add_header("Authorization", f"Bearer {secret}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0
+
+
+# ────────────────── config.yaml 的写（只有 sub 用）──────────────────
+#
+# 全工具只有 sub set 会改内核的配置文件，规矩两条：写前必须备份、写后必须 mihomo -t 校验。
+# 各子命令自己按行改文本，不引 YAML 库——PyYAML 重 dump 会把整份配置的注释和排版全丢掉。
+
+
+def config_path() -> Path:
+    """内核配置文件。"""
+    return MIHOMO_DIR / "config.yaml"
+
+
+def require_config() -> Path:
+    """拿 config.yaml；找不到就把所有试过的路径列出来。"""
+    cfg = config_path()
+    if cfg.exists():
+        return cfg
+    tried = "\n".join(f"    {c}" for c in MIHOMO_DIR_CANDIDATES)
+    die(
+        f"找不到 config.yaml（当前用的是 {MIHOMO_DIR}）\n"
+        f"  用环境变量指定：MIHOMO_DIR=/etc/mihomo mihomo-cli ...\n"
+        f"  或者确认它在下列位置之一：\n{tried}"
+    )
+
+
+BACKUP_DIR = TOOL_DIR / "backups"  # 备份跟系统代理的原状态住一起，不占 mihomo 的配置目录
+BACKUP_KEEP = 5  # 只保留最近 N 份
+
+
+def backup_config() -> Path:
+    """把当前 config 备份一份，返回备份路径。
+
+    必须备份成功才继续：备份没成还往下写，等于把回滚能力赌掉了。"""
+    cfg = config_path()
+    base = f"{cfg.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    bak = BACKUP_DIR / base
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        n = 2
+        while bak.exists():
+            bak = BACKUP_DIR / f"{base}-{n}"
+            n += 1
+        shutil.copy2(cfg, bak)
+    except OSError as e:
+        die(f"备份失败，拒绝继续写配置：{e}")
+    for old in sorted(BACKUP_DIR.glob(f"{cfg.name}.bak-*"))[:-BACKUP_KEEP]:
+        old.unlink(missing_ok=True)
+    return bak
+
+
+def validate_config() -> tuple[bool, str]:
+    """跑 mihomo -t 校验这份配置。返回 (过没过, 最有信息量的一行输出)。"""
+    p = run(str(MIHOMO_BIN), "-t", "-d", str(MIHOMO_DIR))
+    out = (p.stdout + p.stderr).strip()
+    lines = [line for line in out.splitlines() if line.strip()]
+    if p.returncode == 0 and "test is successful" in out:
+        return True, lines[-1] if lines else "（无输出）"
+    for line in lines:
+        if "level=error" in line:
+            return False, line
+    return False, lines[-1] if lines else "（无输出）"
+
+
+def service_action(action: str) -> tuple[bool, str]:
+    """对内核服务做一次 start / stop / restart。返回 (成不成, 给人看的一句)。
+
+    只调服务管理器（brew services / systemd），**从不自己 fork mihomo**：常驻、开机自启、
+    崩了重拉都是它们的事。也**不自己 sudo**：sudo brew services 装的 plist 在
+    /Library/LaunchDaemons、systemd 的 system unit 也在 root 名下，这两种得用户自己在终端里来；
+    Linux 上失败信息带 permission / authentication 字样时，把该用的 sudo 命令附在后面。
+
+    命令返回成功不等于进程真的起/停了（launchd / systemd 是异步的），确认状态是调用方的事——
+    那要问 kernel.service_status()，而 core 不能 import kernel（kernel 依赖 core）。
+    """
+    mgr = service_manager()
+    if mgr is None:
+        return False, f"本机没找到 brew 或 systemd，不知道谁该{action} mihomo"
+    kind, label = mgr
+    if kind == "brew":
+        cmd = ("brew", "services", action, SERVICE_NAME)
+    else:
+        cmd = ("systemctl", action, SERVICE_NAME)
+    p = run(*cmd)
+    out = (p.stdout + p.stderr).strip()
+    if p.returncode != 0:
+        if kind == "systemd" and re.search(
+            r"permission|authentication|access denied|not permitted", out, re.I
+        ):
+            out += f"\n  {label} 要 root：{service_hint(action)}"
+        return False, out or f"{' '.join(cmd)} 失败（退出码 {p.returncode}）"
+    return True, label
+
+
+def _restore(cfg: Path, original: str | None, bak: Path | None) -> None:
+    """把 config 还原成写之前的样子：优先用内存里那份（reset 没落盘备份），否则拷回备份。"""
+    with contextlib.suppress(OSError):
+        if original is not None:
+            cfg.write_text(original, encoding="utf-8", newline="\n")
+        elif bak is not None:
+            shutil.copy2(bak, cfg)
+
+
+def commit_config(cfg: Path, lines: list[str], doing: str, backup: bool = True) -> bool:
+    """备份 → 写 → mihomo -t 校验 → 校验失败回滚。改 config.yaml 的唯一出口。
+
+    只有校验失败才回滚：那说明写进去的东西是坏的，必须还原。写成了但内核没起来、重启失败
+    之类一律不回滚——文件本身是好的，回滚只会把用户刚设的东西丢掉。
+
+    backup=False（只有 reset 用）：不往备份目录落盘，改成把原文留在内存里，失败时写回去。
+    要清的就是这份配置文件，再存一份「清之前的样子」没意义；代价是这次操作本身没了回滚点，
+    所以校验那一步更不能省。
+    """
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    original = None if backup else cfg.read_text(encoding="utf-8", errors="replace")
+    bak = backup_config() if backup else None
+    if bak is not None:
+        print(f"{ok('✓')} 已备份  {dim(str(bak))}")
+    try:
+        cfg.write_text("".join(lines), encoding="utf-8", newline="\n")
+    except OSError as e:
+        # 配置目录属主是 root 的机器上很常见（sudo brew services / 官方 deb），给一句人话
+        _restore(cfg, original, bak)
+        die(f"写 {cfg} 失败：{e}\n  配置没改成")
+    print(f"{ok('✓')} 已写入 {doing}")
+
+    good, last = validate_config()
+    if not good:
+        _restore(cfg, original, bak)
+        back = "按内存里那份还原" if original is not None else f"回滚到 {bak}"
+        print(bad(f"✗ mihomo -t 校验失败，已{back}"))
+        print(bad(f"  {last}"))
+        return False
+    print(f"{ok('✓')} mihomo -t 校验通过  {dim(last)}")
+    return True
 
 
 def size_str(n: int) -> str:

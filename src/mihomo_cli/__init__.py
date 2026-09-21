@@ -5,15 +5,17 @@
     core         地基：常量、目录/可执行文件探测、跑外部命令、读 config.yaml、调控制接口
     kernel       内核观测：进程 / 端口 / 服务状态（只读）/ 控制接口读 / 出口链路 / 连通性探测
     logs         内核日志：写到哪、多大、怎么清空
-    systemproxy  系统代理：macOS networksetup 的开关、原状态保存与还原
-    nics         网卡：macOS 列网络服务，Linux 列接口 / 路由 / 代理变量
+    systemproxy  系统代理：macOS networksetup 的开关、原状态保存与还原、选哪张网卡
+    nics         网卡：nics 列表 / nic 固定用哪张（仅 macOS）
+    service      内核服务：start / stop（brew services / systemctl 的薄封装）+ 与系统代理的交界
+    subs         订阅（一个链接）与 reset：改 config.yaml 的那一块
     status       一屏状态（cmd_status）
-    compose      系统代理层：proxy start / stop / status（内核启停交给系统原生命令）
     cli          命令行入口：argparse、子命令表、异常兜底
 
-依赖方向是单向的：core → kernel → logs → systemproxy → compose → cli，没有循环 import。
-内核服务（brew services / systemctl）**不由本工具启停**：compose 那层只做系统代理，
-kernel 只读服务状态（launchctl / systemctl is-active），见 docs/lifecycle.md。
+依赖方向是单向的：core → kernel → {logs, systemproxy, subs} → service → cli，没有循环 import。
+内核服务（brew services / systemctl）的**常驻、开机自启、崩了重拉归服务管理器**：service 那层
+只替你打那两条命令（从不自己 fork、也从不自己 sudo），具体归服务状态仍然只读
+（launchctl / systemctl is-active），见 docs/lifecycle.md。
 
 入口有两个，都落到 `cli.main()`：
 

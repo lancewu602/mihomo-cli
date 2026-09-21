@@ -1,6 +1,7 @@
-"""网卡视图：macOS 列 networksetup 的网络服务；Linux（服务端、无 GUI）只读地列接口。
+"""网卡：`nics` 列表（两个平台都有）+ `nic` 固定系统代理用哪张（仅 macOS）。
 
-Linux 上没有「按网卡设系统代理」这回事，所以那边只报现状，不改任何设置。
+Linux 上没有“按网卡设系统代理”这回事，那边只报现状、不改任何设置（`nic` 也不注册）。
+macOS 上 `nics` 是只读的（列网络服务 + 每张的代理开关），写设置的只有 `nic` 一条。
 """
 
 from __future__ import annotations
@@ -14,7 +15,18 @@ from pathlib import Path
 
 from .core import IS_MACOS, bad, dim, ok, pad, warn, width
 from .kernel import service_status
-from .systemproxy import active_service, list_services, proxy_states, proxy_summary, require_macos
+from .systemproxy import (
+    NIC_FILE,
+    active_service,
+    list_services,
+    match_service,
+    pin_service,
+    pinned_service,
+    proxy_states,
+    proxy_summary,
+    require_macos,
+    unpin_service,
+)
 
 # ───────────── Linux：网卡与代理现状（nics 用）─────────────
 #
@@ -166,7 +178,60 @@ def nics_linux() -> int:
             "  服务端要让流量走内核就两条路：内核 TUN（config.yaml 的 tun:）或给进程设 http_proxy；"
         )
     )
-    print(dim("  节点/端口/出口看 mihomo-cli status；改 config.yaml（订阅/规则）是手工活"))
+    print(
+        dim(
+            "  节点/端口/出口看 mihomo-cli status；设订阅用 mihomo-cli sub set <链接>，规则仍是手工活"
+        )
+    )
+    return 0
+
+
+def cmd_nic(args: argparse.Namespace) -> int:
+    """固定系统代理打在哪张网卡上（`mihomo-cli nic "Wi-Fi"`）——仅 macOS。
+
+    不管的话，`start` 用的是当前活跃那张（走默认路由的），这也是推荐的默认值：换网络
+    （插网线、开热点）不用改设置，工具跟着走。要固定是因为“活跃网卡”在有些机器上会来回跳
+    （同时连着有线 + Wi-Fi + iPhone USB 时最明显），跳到一张没在用的网卡上就等于没开代理。
+
+    存在哪、怎么解析见 systemproxy.pinned_service() / target_service()。"""
+    require_macos("nic", "它设的是 macOS 网络服务的名字")
+    services = list_services()
+
+    def line(label: str, value: str) -> None:
+        print(f"  {pad(label, 12)} {value}")
+
+    if args.reset:
+        if unpin_service():
+            print(f"{ok('✓')} 已解除固定，以后跟着活跃网卡走")
+        else:
+            print(dim("本来就没固定过任何网卡（一直是跟着活跃网卡走）"))
+        return 0
+
+    if args.name is not None:
+        svc = match_service(args.name, services)  # 名字不对就在这里报错并列出可选项
+        pin_service(svc["name"])
+        where = f" / {svc['device']}" if svc["device"] else ""
+        print(f"{ok('✓')} 已固定用 {svc['name']}{where}")
+        if not svc["enabled"]:
+            print(
+                warn("⚠ 它现在是停用状态：先在「系统设置 → 网络」里启用，否则 start 会拒绍开代理")
+            )
+        print(dim(f"  写进 {NIC_FILE}；解除固定：mihomo-cli nic --reset"))
+        return 0
+
+    active = active_service(services)
+    if (pin := pinned_service()) is None:
+        now = f"  现在就是 {active['name']}" if active else ""
+        current = dim("自动（跟着活跃网卡走）") + (now or warn("  现在没有活跃网卡"))
+    elif (hit := next((s for s in services if s["name"] == pin), None)) is None:
+        current = warn(f"{pin}（已固定，但这张网卡现在不在了——会回退到活跃的那张）")
+    else:
+        device = f" / {hit['device']}" if hit["device"] else ""
+        current = ok(f"{hit['name']}{device}") + dim("  ← 固定")
+
+    line("当前网卡", current)
+    line("可用", "、".join(s["name"] + (" ●" if s["active"] else "") for s in services))
+    line("改它", 'mihomo-cli nic "<网卡名>"；--reset 回到自动')
     return 0
 
 
@@ -176,7 +241,7 @@ def cmd_nics(_: argparse.Namespace) -> int:
     require_macos("nics", "它列的是 networksetup 的网络服务")
     services = list_services()
     states = proxy_states(services)  # 一次读回（plist 优先），别在循环里逐张问
-    print(dim("macOS 网卡（proxy start/stop 的参数就是下面的名字，带空格要加引号）"))
+    print(dim("macOS 网卡（mihomo-cli nic 用的就是下面的名字，带空格要加引号）"))
     print()
     print(f"    {pad('网卡', 22)}{pad('设备', 10)}{pad('状态', 14)}系统代理")
     for s in services:
@@ -199,5 +264,5 @@ def cmd_nics(_: argparse.Namespace) -> int:
         print(dim(f"不传网卡名时用 ● 那张：{auto['name']}"))
     else:
         print(warn("当前没有活跃网卡（没默认路由），start 不传网卡名会直接失败"))
-    print(dim('例：mihomo-cli proxy start "USB 10/100 LAN"'))
+    print(dim('例：mihomo-cli nic "USB 10/100 LAN"（固定后 start/stop 就用它）'))
     return 0

@@ -16,37 +16,54 @@
 | 写 | `PUT /proxies/{组名}` | 切换选中节点。立刻生效，**只进内核缓存，不写 config.yaml** |
 | 写 | `GET /proxies/{节点}/delay`、`GET /group/{组}/delay`、`GET {组}/healthcheck` | 测速 |
 | 写 | `PUT /providers/proxies/{名}` | 让内核当场重拉这个订阅 |
-| 写 | `PUT /configs?force=true` | 热重载配置文件 |
+| 写 | `PUT /configs?force=true` | 热重载配置文件（本工具不用，见下） |
 | 写 | `PATCH /configs` | 切 rule / global / direct 模式 |
 | 面板 | `GET /ui` | 内置面板入口（yacd / metacubexd 这类前端挂上去） |
 
 安全上两条硬要求：**绑 `127.0.0.1`**（这接口等于内核的 root，绝不能对外），以及配 `secret`
 （之后每个请求都要带 `Authorization: Bearer <secret>`）。这个工具会自动带 token
-（`src/mihomo_cli/core.py:291` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
+（`src/mihomo_cli/core.py:320` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
 
 ## 本项目用了哪些端点
 
-出口只有两个封装：
+出口就三个封装：
 
-- `src/mihomo_cli/core.py:291` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
+- `src/mihomo_cli/core.py:320` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
   必须保留状态码：有些接口失败内核回 `4xx` 加一句 message，跟“内核没起来”（`0`）不是一回事。
-- `src/mihomo_cli/core.py:318` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
+- `src/mihomo_cli/core.py:347` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
   降级约定：status 在内核没起来时不崩，只显示“读不到”。
+- `src/mihomo_cli/core.py:353` **`controller_put(path, timeout)`** → 发一个 PUT，只回状态码（连不上给 `0`）。
+  它是唯一会改运行中内核状态的通道，目前只有 `sub update` 用。
 
-本工具已不再写配置（不下发 `PUT /configs?force=true`），只用上面的读接口：
+读接口用在哪：
 
 | 代码位置 | 调用 | 干什么 |
 |---|---|---|
 | `src/mihomo_cli/status.py:129` | `GET /version` | 判断控制接口可用 |
 | `src/mihomo_cli/kernel.py:65` / `:87` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
 | `src/mihomo_cli/kernel.py:113` / `:103` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
+| `src/mihomo_cli/subs.py:510` / `:704` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+
+写接口只用一个：`src/mihomo_cli/subs.py:550` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`。
+
+**不用 `PUT /configs?force=true` 热重载。** `sub set` 改完 config.yaml 走的是**重启内核服务**
+（`brew services restart` / `systemctl restart`）。两个理由：热重载吃不住 provider 的 url 变更与
+新增的 provider（`sub set` 恰恰就是这两种情形），而且重启顺手把健康检查历史（延迟数据）清了，
+换链接之后不会拿着旧链接的延迟当新的。改完 config.yaml 一律先 `mihomo -t` 校验，不过就回滚。
 
 ## 踩过的点
 
 - **组名/节点名必须 URL 编码**：中文名、带空格的“香港 01”很常见，一律
   `urllib.parse.quote(name, safe='')` 之后再拼进路径。
-- **`PUT /proxies/{组}` 不改 config.yaml**：切节点是内核运行时状态，重启就回到 config 里的
-  第一个选项。要“永久”换默认，得改 config.yaml 里组的顺序。本工具不做组切换（那是运行时写操作），
-  用 mihomo 自带的控制面板即可。
+- **`PUT /proxies/{组}` 不改 config.yaml**：切节点是内核**运行时**状态（body 是 `{"name": "<节点名>"}`）。
+  本工具的 `sub use <序号>` 就是打这个接口——它**不写配置文件**，靠的是 config 里
+  `profile.store-selected: true` 让内核把选择存进 `cache.db`，实测重启后仍然是那个节点
+  （不写这行的话一重启就回到组的第一个候选）。要“永久”换默认又不想依赖缓存，就得改
+  config.yaml 里组的顺序——那仍然是用控制面板/手工的事。
+- **`PUT /providers/proxies/{名}` 失败时回的是 `503`，不是 `404`**：`503` = 内核去拉了但没拉成
+  （实测：`proxy-providers` 没写 `proxy: DIRECT` 时，这个请求走的是内部分流、进了隧道，
+  隧道第一跳是个坏节点就 503）。
+  `src/mihomo_cli/subs.py` 把这两种分开提示，再降级成「删缓存 + 重启内核」。
 - **`external-controller` 没配或端口错了**，症状是“进程在、端口在监听、但接口读不到”。
   `status` 会把这两种情况分开显示（代理端口 vs 控制接口），别混着看。

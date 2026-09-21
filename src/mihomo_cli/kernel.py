@@ -1,7 +1,7 @@
 """内核这一层（观测）：进程 / 端口 / 控制接口读 / 出口链路 / 连通性探测。
 
-服务生命周期在 service.py（brew services / systemd），日志在 logs.py。这三块都只依赖 core
-和本模块，没有循环。
+启停内核（start / stop）在 service.py，日志在 logs.py；服务状态（不是动作）就在下面这节，
+因为它是“内核现在怎么样”的一部分。这几块都只依赖 core 和本模块，没有循环。
 """
 
 from __future__ import annotations

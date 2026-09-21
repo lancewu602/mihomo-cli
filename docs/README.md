@@ -5,9 +5,10 @@
 
 | 文档 | 什么时候看 |
 |---|---|
-| [control-api.md](control-api.md) | 要调 mihomo 控制接口、或改 status / kernel 的取数逻辑 |
+| [control-api.md](control-api.md) | 要调 mihomo 控制接口、或改 status / kernel / subs 的取数逻辑 |
+| [subscription.md](subscription.md) | 要动 `sub set\|update\|show`（为什么在配置里只维护一块、换链接与更新差在哪、为什么不热重载） |
 | [packaging.md](packaging.md) | 要构建二进制、改安装方式、加模块、动 `pyproject.toml` |
-| [lifecycle.md](lifecycle.md) | 动 `proxy start\|stop\|status`（系统代理层怎么工作；内核为什么交给系统原生命令） |
+| [lifecycle.md](lifecycle.md) | 动 `start\|stop`（内核服务 + 系统代理的开关）或 `nic`（选哪张网卡），或改那两条不变式 |
 
 ## 分发
 

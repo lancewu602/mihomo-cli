@@ -1,6 +1,8 @@
-"""macOS 系统代理这一层：列网络服务、读写三种代理、状态存档与还原、start/stop。
+"""macOS 系统代理这一层：列网络服务、读写三种代理、选哪张网卡、状态存档与还原。
 
-「按网卡设系统代理」只有 macOS 有（networksetup）；Linux 那边 start/stop 只管内核服务。
+“按网卡设系统代理”只有 macOS 有（networksetup）；Linux 那边 start/stop 只管内核服务。
+这个模块只做网卡/代理的读写与解析，**不认识命令行**：命令面在 service.py（start/stop 顺带开关
+代理）和 nics.py（nic / nics 两个网卡命令）。
 """
 
 from __future__ import annotations
@@ -17,10 +19,12 @@ from .core import (
     IS_MACOS,
     SERVICE_HINT,
     STATE_FILE,
+    TOOL_DIR,
     bad,
     die,
     dim,
     listener,
+    note,
     ok,
     port_bound,
     proxy_port,
@@ -57,6 +61,11 @@ KINDS = {
     "HTTPS": ("securewebproxy", "securewebproxystate"),
     "SOCKS": ("socksfirewallproxy", "socksfirewallproxystate"),
 }
+
+# 固定用哪张网卡（`mihomo-cli nic "Wi-Fi"` 写它）。跟系统代理的原状态（state.json）
+# 分两个文件：那个文件按“网卡名 → 原设置”组织、还有按网卡名遍历的清理逻辑，
+# 混一个配置项进去早晚被当成孤儿记录清掉。
+NIC_FILE = TOOL_DIR / "nic"
 
 
 def ns(*args: str) -> str:
@@ -137,7 +146,7 @@ def no_active_nic_error() -> str:
     return (
         "当前没有活跃网卡（没有默认路由），不知道该给哪张网卡开代理。\n"
         f"  可用的有：{'、'.join(s['name'] for s in nics)}\n"
-        '  也可以直接指定：mihomo-cli proxy start "USB 10/100 LAN"'
+        '  先固定一张：mihomo-cli nic "USB 10/100 LAN"（之后 start/stop 就用它）'
     )
 
 
@@ -158,31 +167,65 @@ def match_service(name: str, services: list[dict]) -> dict:
     die(f"没有名为 {name!r} 的网卡。\n  可用的有：{valid}\n  用 mihomo-cli nics 查看详情")
 
 
-def resolve_stop_targets(name: str | None) -> tuple[list[dict], str | None]:
-    """stop 该关哪些网卡（可能不止一张，也可能一张都没有）。
+def pinned_service() -> str | None:
+    """固定用哪张网卡（`mihomo-cli nic "Wi-Fi"` 设的那个），没设过给 None。
 
-    不传网卡名时不能只看当前活跃网卡：可能你还开着别的网卡的代理，得一起收尾。"""
-    if name is not None:
-        return [match_service(name, list_services())], None
+    单独一个文件、**不塞进 state.json**：那个文件是按“网卡名 → 开代理前的原设置”组织的，
+    还被按网卡名遍历的清理逻辑碰过，混一个配置项进去早晚出事。"""
+    try:
+        return NIC_FILE.read_text(encoding="utf-8").strip() or None
+    except OSError:  # 没设过（文件不存在）、或读不动
+        return None
 
+
+def pin_service(name: str) -> None:
+    """固定用这张网卡。名字传进来之前已经过 match_service 校验。"""
+    try:
+        NIC_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NIC_FILE.write_text(name + "\n", encoding="utf-8")
+    except OSError as e:
+        die(f"写 {NIC_FILE} 失败，{e}")
+
+
+def unpin_service() -> bool:
+    """清掉固定，回到“跟着活跃网卡走”。返回原本有没有设过。"""
+    try:
+        NIC_FILE.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        die(f"删 {NIC_FILE} 失败，{e}")
+
+
+def target_service(name: str | None = None) -> dict:
+    """系统代理该打在哪张网卡上：显式给的名字 > 固定的那张（`nic` 设的）> 当前活跃那张。
+
+    三条路都不通就报错退出，绝不猜另一张：把代理开到你没在用（或已停用）的网卡上，
+    看起来“成功了”其实整机没走代理，比报错难查得多。"""
     services = list_services()
-    existing = {s["name"] for s in services}
-    recorded = list(load_state())
+    if name is not None:
+        return match_service(name, services)
 
-    # 网卡被拔掉/改名后，它的记录会变成孤儿并永远留在文件里，顺手清掉
-    for old in recorded:
-        if old not in existing:
-            forget_state(old)
-
-    targets = [s for s in services if s["name"] in recorded]
-    if targets:
-        names = "、".join(s["name"] for s in targets)
-        return targets, f"未指定网卡名，关掉之前开过代理的：{names}"
+    if pin := pinned_service():
+        hit = next((s for s in services if s["name"] == pin), None)
+        if hit is None:
+            # 固定的那张没了（改名、拔掉）：回退到活跃网卡并说一声，别繃着不动
+            print(warn(f"⚠ 固定的网卡 {pin!r} 现在不在了（改名或拔掉了？），改用活跃的那张"))
+        elif not hit["enabled"]:
+            die(
+                f"固定的网卡 {hit['name']!r} 是停用状态，先在「系统设置 → 网络」里启用它，\n"
+                f"  或者解除固定：mihomo-cli nic --reset"
+            )
+        else:
+            note(f"用固定的网卡 {hit['name']}")
+            return hit
 
     svc = active_service(services)
-    if svc:
-        return [svc], f"未指定网卡名，没有开启记录，看的就是活跃网卡 {svc['name']}"
-    return [], None
+    if svc is None:
+        die(no_active_nic_error())
+    note(f"没指定也没固定网卡，用当前活跃网卡 {svc['name']}")
+    return svc
 
 
 # ─────────────────────────── 系统代理读写 ───────────────────────────
@@ -258,7 +301,7 @@ def write_state(data: dict) -> None:
 
 
 def save_original_state(service: str) -> None:
-    """存下该网卡在 proxy start 之前的设置：绕过列表 + 三个代理原本指向的地址。"""
+    """存下该网卡在开代理之前的设置：绕过列表 + 三个代理原本指向的地址。"""
     data = load_state()
     if "bypass" in data:  # 早期版本的扁平格式，认不出来，丢掉重记
         data = {}
@@ -297,7 +340,7 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
         die(
             f"{what} 只在 macOS 上可用：{why}。\n"
             f"  Linux 上没有 networksetup，系统代理这一层不适用；\n"
-            f"  内核服务自己起：sudo systemctl start|stop|restart mihomo\n"
+            f"  内核启停：mihomo-cli start|stop\n"
             f"  两端通用的命令：\n"
             f"    mihomo-cli status / nics / logs"
         )
@@ -337,15 +380,6 @@ def plist_proxy_states() -> dict[str, dict[str, dict]]:
             }
             for kind in KINDS
         }
-    return out
-
-
-def plist_bypass_map() -> dict[str, list[str]]:
-    """绕过列表（plist 版，一次读完；给展示用）。"""
-    out: dict[str, list[str]] = {}
-    for svc in (_plist_all().get("NetworkServices") or {}).values():
-        if name := svc.get("UserDefinedName"):
-            out[name] = [str(d) for d in ((svc.get("Proxies") or {}).get("ExceptionsList") or [])]
     return out
 
 
@@ -442,7 +476,7 @@ def proxy_on(service: str) -> int:
         restored = teardown(service)
         print(warn("⚠ 探测没通，已回滚系统代理（内核未受影响）"))
         print(dim(f"    {restored}"))
-        print(dim("    先 mihomo-cli status 看节点是否可用，换好节点再 mihomo-cli proxy start"))
+        print(dim("    先 mihomo-cli status 看节点是否可用，换好节点再 mihomo-cli start"))
         return 1
 
     print(f"    连通性 {ok('✓ ' + info)}")
