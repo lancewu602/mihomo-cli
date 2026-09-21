@@ -28,11 +28,11 @@
 ```
 kernel start|stop|restart   内核层（跨平台）：只动内核服务，不碰系统代理
 kernel stop --force        系统代理还指着内核时也照停（那些网卡上的应用会断网）
-proxy on|off|show [网卡名]  系统代理层（仅 macOS）：只动 networksetup 的开关
+proxy on|off|show [网卡名]  系统代理层（**仅 macOS**；Linux 下这个命令不注册）
 start [网卡名]              = kernel start + proxy on（Linux 上只有内核那半）
 stop [网卡名]               = proxy off 然后 kernel stop（顺序不能反）
 
-nics [网卡名]            列网卡（macOS 网络服务 / Linux 接口与路由）
+nics [网卡名]            列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
 restart [--keep-log]     重启内核服务让新配置生效；默认顺手清空日志
 status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性（默认动作）
 

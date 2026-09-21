@@ -37,7 +37,7 @@ import os
 import sys
 
 from .compose import cmd_kernel, cmd_proxy, cmd_restart, cmd_start, cmd_stop
-from .core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
+from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .geodata import FILE_NAMES, MIRRORS, cmd_geodata
 from .groups import cmd_group
 from .logs import cmd_logs
@@ -48,6 +48,13 @@ from .subs import cmd_sub
 
 # ─────────────────────────── 入口 ───────────────────────────
 
+# start / stop 的说明也按平台写：Linux 上没有系统代理那层，帮助里就别提 proxy
+if IS_MACOS:
+    START_HELP, STOP_HELP = "= kernel start + proxy on", "= proxy off + kernel stop（顺序不能反）"
+else:
+    START_HELP = "启动内核服务（systemd）；系统代理那层是 macOS 专有"
+    STOP_HELP = "停内核服务（systemd）"
+
 SUBCOMMANDS = {
     "nics": ("列网卡（macOS 网络服务 / Linux 接口与路由）", cmd_nics),
     "geodata": ("geodata 数据文件：list / download / apply", cmd_geodata),
@@ -57,13 +64,20 @@ SUBCOMMANDS = {
     "proxy": ("系统代理层：on / off / show（macOS）", cmd_proxy),
     "rules": ("规则树：sync 同步片段 / diff 对比 / apply 落地 / rollback 回滚", cmd_rules),
     "sub": ("订阅：add 加 / list 列 / nodes 看节点 / update 刷在用的 / rm 删", cmd_sub),
-    "start": ("= kernel start + proxy on（Linux 只启内核服务）", cmd_start),
-    "stop": ("= proxy off + kernel stop（顺序不能反）", cmd_stop),
+    "start": (START_HELP, cmd_start),
+    "stop": (STOP_HELP, cmd_stop),
     "restart": ("= kernel restart（让新配置生效）；顺手清空日志", cmd_restart),
     "status": ("查看当前状态（默认）", cmd_status),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics", "subs": "sub"}
+
+# 只有 macOS 才有的子命令（系统代理层靠 networksetup）。
+# Linux 上干脆不注册：--help 里挂着一个用不了的命令，比没有更让人困惑。
+MACOS_ONLY = {"proxy"}
+if not IS_MACOS:
+    for _name in MACOS_ONLY:
+        SUBCOMMANDS.pop(_name, None)
 
 # 这些子命令不收"网卡名"这个位置参数
 NO_SERVICE_ARG = {
@@ -98,13 +112,22 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # 手敲了 macOS 专有的命令：给一句人话，而不是 argparse 那句 invalid choice
+    raw = sys.argv[1:] if argv is None else list(argv)
+    if raw and not IS_MACOS and ALIASES.get(raw[0], raw[0]) in MACOS_ONLY:
+        die(
+            f"{raw[0]} 只在 macOS 上可用：系统代理靠 macOS 的 networksetup，Linux 上没有这一层。\n"
+            f"  Linux 上内核那半用：mihomo-cli kernel start|stop|restart（start / stop 也行）\n"
+            f"  shell 里的 http_proxy / https_proxy 看：mihomo-cli nics\n"
+            f"  想让整机流量走内核：用 mihomo 的 TUN（config.yaml 的 tun:）"
+        )
     parser = argparse.ArgumentParser(
         prog="mihomo-cli",
         # epilog 是手工排的多行，用 Raw 格式化器，别让 argparse 把换行折掉
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="管 mihomo：内核服务、系统代理、订阅、规则、geodata 数据",
         epilog=(
-            "常用：start 起内核+代理；rules sync --from <clone> → rules diff → rules apply；\n"
+            "常用：start 起内核（macOS 上顺带开系统代理）；rules sync --from <clone> → rules diff → apply；\n"
             "sub add <链接>；geodata download → geodata apply。\n"
             "完整说明见文件头 docstring（python3 -m pydoc mihomo_cli.cli）；\n"
             "设计说明在仓库 docs/（控制接口 / 打包 / 交互界面）。"

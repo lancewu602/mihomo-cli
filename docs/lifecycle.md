@@ -50,11 +50,13 @@ core → kernel → service → logs ─┐
 ## Linux 上是什么样
 
 - `kernel *` 全平台通用（systemd）。
-- `proxy *`：`show` 会说明"没有这一层"并指向 `kernel` / `nics`；`on` / `off` 报错退出，
-  提示改用 `mihomo-cli kernel`。
+- `proxy *`：**Linux 下干脆不注册**这个子命令 —— `--help` 里不会出现一个用不了的命令，
+  `start` / `stop` 的说明也按平台写成"启动/停内核服务"。手敲 `mihomo-cli proxy` 会得到一句
+  明确的话（系统代理靠 networksetup，Linux 上没有这一层）+ 指回 `kernel` / `nics` / TUN。
 - `start` 只做内核那半；`stop` 只停内核（传了网卡名会明确拒绝，而不是静默忽略）。
-- "让 shell 里的进程走代理"在 Linux 上是 `http_proxy` / `https_proxy` 环境变量，
-  `mihomo-cli nics` 会把它们列出来；本工具不改它们。
+- Linux 上的"当前代理"就是环境变量：`http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`
+  （大小写都认）。`mihomo-cli nics` 会逐行列出来，并说明它们**只影响从当前 shell 启动的进程**；
+  本工具不改它们。想让整机流量走内核是 TUN 模式（`config.yaml` 的 `tun:`）的事。
 
 ## 动手改这块之前
 

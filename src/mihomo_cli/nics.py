@@ -12,7 +12,7 @@ import socket
 import struct
 from pathlib import Path
 
-from .core import IS_MACOS, bad, dim, ok, pad, warn
+from .core import IS_MACOS, bad, dim, ok, pad, warn, width
 from .service import service_status
 from .systemproxy import active_service, list_services, proxy_summary, require_macos
 
@@ -103,6 +103,34 @@ def proxy_env() -> dict[str, str]:
     return out
 
 
+def print_proxy_env() -> None:
+    """Linux 版的“当前代理”：只有环境变量，没有系统级开关。
+
+    每行一个变量，因为这是 Linux 上唯一能告诉人“进程会不会走代理”的东西——
+    http_proxy / https_proxy / all_proxy 只影响**从当前 shell 启动**的进程，而且得用户自己设。
+    """
+    env = proxy_env()
+    label = "代理变量  "
+    if env:
+        for i, (k, v) in enumerate(env.items()):
+            print(f"  {label if i == 0 else ' ' * width(label)}{k}={v}")
+        print(
+            dim(
+                "  " + " " * width(label) + "只影响从当前 shell 启动的进程（curl / git / pip 这类）"
+            )
+        )
+        return
+    print(dim("  代理变量  没设（Linux 没有“系统代理”这一层，这个变量只影响从 shell 启动的进程）"))
+    print(
+        dim(
+            "            要临时开：export https_proxy=http://127.0.0.1:7890 http_proxy=$https_proxy"
+        )
+    )
+    print(
+        dim("            想让整机流量走内核：用 mihomo 的 TUN（config.yaml 的 tun:），不靠这个变量")
+    )
+
+
 def nics_linux() -> int:
     """Linux（服务端）版的 nics：列网卡，并把「流量现在到底怎么走」的关键信息摆出来。"""
     print(dim("Linux 网卡（服务端只读视图：接口 / 默认路由 / 代理变量 / 内核服务）"))
@@ -125,15 +153,7 @@ def nics_linux() -> int:
         print(f"  默认路由  dev {dev}" + (f"  via {default[1]}" if default[1] else ""))
     else:
         print(warn("  默认路由  没有（/proc/net/route 里没有 default 那条）"))
-    env = proxy_env()
-    if env:
-        print("  代理变量  " + "  ".join(f"{k}={v}" for k, v in env.items()))
-    else:
-        print(
-            dim(
-                "  代理变量  没设 http_proxy/https_proxy/all_proxy（它们只影响从 shell 启动的进程）"
-            )
-        )
+    print_proxy_env()
     state, label = service_status()
     if label:
         mark = {"running": ok("已启动"), "stopped": bad("已停止")}.get(state, warn(state))
