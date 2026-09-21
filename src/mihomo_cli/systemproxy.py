@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import json
+import plistlib
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from .core import (
     HOST,
@@ -215,9 +218,14 @@ def set_bypass(service: str, domains: list[str] | None) -> None:
         ns("-setproxybypassdomains", service, "Empty")
 
 
-def proxy_summary(service: str) -> str:
-    """nics 列表里那一列摘要：off / on / 部分: HTTP+SOCKS。"""
-    on = [k for k in KINDS if get_proxy(service, k)["enabled"]]
+def proxy_summary(service: str, states: dict[str, dict[str, dict]] | None = None) -> str:
+    """nics 列表里那一列摘要：off / on / 部分: HTTP+SOCKS。
+
+    states 传 all_proxy_states() 的结果可以省掉每张网卡 3 次 networksetup。"""
+    if states is not None:
+        on = [k for k, p in states.get(service, {}).items() if p["enabled"]]
+    else:
+        on = [k for k in KINDS if get_proxy(service, k)["enabled"]]
     if not on:
         return bad("off")
     if len(on) == len(KINDS):
@@ -294,26 +302,116 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
         )
 
 
-def open_nics() -> list[str]:
-    """哪些网卡的系统代理现在真开着（macOS）。"""
-    return [
-        s["name"] for s in list_services() if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)
-    ]
+PREFS_PLIST = Path("/Library/Preferences/SystemConfiguration/preferences.plist")
 
 
-def proxies_pointing_here() -> list[str]:
+def _plist_all() -> dict:
+    """读系统那份 preferences.plist；读不到（权限/格式变了/不是 macOS）给 {}。"""
+    try:
+        with PREFS_PLIST.open("rb") as f:
+            return plistlib.load(f)
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return {}
+
+
+def plist_proxy_states() -> dict[str, dict[str, dict]]:
+    """从 plist 一次读回所有网卡的代理设置（~1ms）。
+
+    networksetup 的 `-getwebproxy` 读的就是这份文件，所以两者语义一致（实测 7 张网卡 × 3 协议
+    逐项相同，连绕过列表顺序都一样）。**唯一的例外**是 plist 可能少几张网卡（实测 iPhone USB
+    就不在里面），所以调用方要对缺失的网卡回退 networksetup——见 proxy_states()。
+    """
+    out: dict[str, dict[str, dict]] = {}
+    for svc in (_plist_all().get("NetworkServices") or {}).values():
+        name = svc.get("UserDefinedName")
+        if not name:
+            continue
+        px = svc.get("Proxies") or {}
+        out[name] = {
+            kind: {
+                "enabled": bool(px.get(f"{kind}Enable")),
+                "server": str(px.get(f"{kind}Proxy", "") or ""),
+                # 未设置时 networksetup 报 "0"，这里对齐它，免得两边的输出不一样
+                "port": str(px.get(f"{kind}Port", "0") or "0"),
+            }
+            for kind in KINDS
+        }
+    return out
+
+
+def plist_bypass_map() -> dict[str, list[str]]:
+    """绕过列表（plist 版，一次读完；给展示用）。"""
+    out: dict[str, list[str]] = {}
+    for svc in (_plist_all().get("NetworkServices") or {}).values():
+        if name := svc.get("UserDefinedName"):
+            out[name] = [str(d) for d in ((svc.get("Proxies") or {}).get("ExceptionsList") or [])]
+    return out
+
+
+def fresh_proxy_states(
+    services: list[dict] | None = None, workers: int = 8
+) -> dict[str, dict[str, dict]]:
+    """全部走 networksetup 读一遍（每张网卡 × 每种协议一次调用，所以并发跑）。
+
+    **写完立刻回读**、以及"停内核会不会断网"这类安全判断要用这个：plist 是 configd 异步落盘的，
+    刚 `networksetup -set...` 完可能还没刷进去。
+    """
+    services = services if services is not None else list_services()
+    jobs = [(s["name"], kind) for s in services for kind in KINDS]
+    out: dict[str, dict[str, dict]] = {s["name"]: {} for s in services}
+    if not jobs:
+        return out
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for (name, kind), state in zip(jobs, pool.map(lambda jk: get_proxy(*jk), jobs)):
+            out[name][kind] = state
+    return out
+
+
+def proxy_states(services: list[dict] | None = None) -> dict[str, dict[str, dict]]:
+    """读所有网卡 × 三种协议的代理设置——**展示当下状态用这个**。
+
+    先读系统 plist（一次 ~1ms，且永远是最新的），plist 里没有的网卡（实测 iPhone USB 就是）
+    逐张回退 networksetup（并发）。networksetup 串着读要 0.6s+，这条路径下只剩 ms 级。
+
+    顺序按 services 来，输出稳定。
+    """
+    services = services if services is not None else list_services()
+    fast = plist_proxy_states()
+    out: dict[str, dict[str, dict]] = {}
+    missing: list[dict] = []
+    for s in services:
+        if s["name"] in fast:
+            out[s["name"]] = fast[s["name"]]
+        else:
+            missing.append(s)
+    if missing:  # plist 里没有的：老老实实问 networksetup
+        out.update(fresh_proxy_states(missing))
+    return {s["name"]: out[s["name"]] for s in services}  # 保持 services 的顺序
+
+
+def open_nics(
+    states: dict[str, dict[str, dict]] | None = None, *, fresh: bool = False
+) -> list[str]:
+    """哪些网卡的系统代理现在真开着（macOS）。
+
+    默认走 proxy_states()（plist，快）；刚写完代理或要拿来做安全判断时传 fresh=True。"""
+    states = states if states is not None else (fresh_proxy_states() if fresh else proxy_states())
+    return [name for name, kinds in states.items() if any(p["enabled"] for p in kinds.values())]
+
+
+def proxies_pointing_here(
+    states: dict[str, dict[str, dict]] | None = None, *, fresh: bool = False
+) -> list[str]:
     """哪些网卡的系统代理正指着本工具的端口。
 
     用来拦住"内核停了但那几张网卡还指着它"——那种状态下停内核等于整机断网。"""
     mine = f"{HOST}:{proxy_port()}"
-    out = []
-    for s in list_services():
-        for kind in KINDS:
-            p = get_proxy(s["name"], kind)
-            if p["enabled"] and f"{p['server']}:{p['port']}" == mine:
-                out.append(s["name"])
-                break
-    return out
+    states = states if states is not None else (fresh_proxy_states() if fresh else proxy_states())
+    return [
+        name
+        for name, kinds in states.items()
+        if any(p["enabled"] and f"{p['server']}:{p['port']}" == mine for p in kinds.values())
+    ]
 
 
 def verify_open_nics(port: int) -> None:

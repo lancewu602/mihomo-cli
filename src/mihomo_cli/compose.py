@@ -43,8 +43,10 @@ from .systemproxy import (
     list_services,
     match_service,
     no_active_nic_error,
+    plist_bypass_map,
     proxies_pointing_here,
     proxy_on,
+    proxy_states,
     require_macos,
     resolve_stop_targets,
     teardown,
@@ -99,7 +101,9 @@ def kernel_status() -> int:
 def kernel_stop_checked(force: bool = False) -> int:
     """停内核服务。默认会拦住"系统代理还指着它"这种情况（那样子停下去等于断网）。"""
     if IS_MACOS and not force:
-        pointing = proxies_pointing_here()
+        # fresh=True：plist 是 configd 异步落盘的，这里拿它做"停下去会不会断网"的判断，
+        # 宁可多花 0.1s 也要读当下的真实设置
+        pointing = proxies_pointing_here(fresh=True)
         if pointing:
             die(
                 f"{'、'.join(pointing)} 的系统代理还指着 {HOST}:{proxy_port()}。\n"
@@ -154,9 +158,13 @@ def proxy_show(name: str | None = None) -> int:
         return 0
     services = list_services()
     targets = [match_service(name, services)] if name is not None else services
+    # 展示当下状态：走 proxy_states()（系统 plist，ms 级）；plist 里没有的网卡会自动回退
+    # networksetup。原来这里是 N 张网卡 × 3 种协议各调一次 networksetup（0.7s）。
+    all_states = proxy_states(services)
+    bypass_map = plist_bypass_map()
     mine = f"{HOST}:{proxy_port()}"
     for s in targets:
-        states = {k: get_proxy(s["name"], k) for k in KINDS}
+        states = all_states.get(s["name"]) or {k: get_proxy(s["name"], k) for k in KINDS}
         on = [k for k, p in states.items() if p["enabled"]]
         head = f"{s['name']}" + (f" / {s['device']}" if s["device"] else "")
         mark = ok("已开启") if on else bad("未开启")
@@ -166,7 +174,8 @@ def proxy_show(name: str | None = None) -> int:
             target = f"{p['server']}:{p['port']}" if p["server"] else dim("未设置")
             here = dim("  ← 本工具") if f"{p['server']}:{p['port']}" == mine else ""
             print(f"    {pad(kind.lower(), 12)} {state}  {target}{here}")
-        bypass = get_bypass(s["name"])
+        # 绕过列表同样优先 plist（一次读完）；plist 里没有这张网卡才问 networksetup
+        bypass = bypass_map[s["name"]] if s["name"] in bypass_map else get_bypass(s["name"])
         _line("", dim(f"绕过列表 {len(bypass)} 条" if bypass else "绕过列表 未设置"))
     return 0
 

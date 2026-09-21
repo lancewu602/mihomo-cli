@@ -58,6 +58,28 @@ core → kernel → service → logs ─┐
   （大小写都认）。`mihomo-cli nics` 会逐行列出来，并说明它们**只影响从当前 shell 启动的进程**；
   本工具不改它们。想让整机流量走内核是 TUN 模式（`config.yaml` 的 `tun:`）的事。
 
+## 读系统代理状态：plist 优先，写后与安全判断用 networksetup
+
+`networksetup -getwebproxy` 一次只回答"一张网卡的某种协议"：本机 7 张网卡 × 3 种 = 21 次调用、
+每次 ~30ms，串着跑就是 0.6s+（`status` 那几行"系统代理/http/https/socks"原来就这么慢）。
+但 macOS 把所有网卡的代理设置都放在 `/Library/Preferences/SystemConfiguration/preferences.plist`
+里，**一次读文件（~1ms）**就拿到全部——networksetup 的 `-get*` 读的就是它，语义一致（实测 7 张
+网卡 × 3 协议逐项相同，连绕过列表顺序都一样）。于是分成两条路：
+
+| 用途 | 用哪个 | 为什么 |
+|---|---|---|
+| 展示当下状态（`status` / `nics` / `proxy show` / `kernel`） | `proxy_states()`（plist 优先） | 快；plist 永远是最新的 |
+| 写完立刻回读（`proxy on` 打印每项 on/off、`stop` 打印还原结果） | `get_proxy()`（networksetup） | plist 是 configd 异步落盘的，刚写完可能还没刷进去 |
+| 安全判断（`kernel stop` 前"代理还指着内核吗"） | `proxies_pointing_here(fresh=True)` | 判断错了会断网，宁可多花 0.1s |
+
+两个坑：
+
+- **plist 可能少几张网卡**（实测 `iPhone USB` 不在里面，那里是过期的 `iPhone`），所以
+  `proxy_states()` 对缺失的网卡要逐张回退 networksetup（并发补，一次批量）。
+- **未设置时的表示不同**：networksetup 报 `Port: 0`，plist 里根本没这个键；读的时候统一成
+  `"0"`，否则两边输出会差一个字符。停用标记与网卡顺序 plist 里也没有 → 继续由
+  `list_services()` 提供。
+
 ## 动手改这块之前
 
 - 新增"会动系统状态"的命令时，想清楚它属于哪一层，顺序不变式有没有被绕过。

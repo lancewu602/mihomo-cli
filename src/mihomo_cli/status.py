@@ -28,7 +28,7 @@ from .kernel import current_node, mihomo_pid, probe
 from .logs import find_log_file
 from .service import service_status
 from .subs import provider_overview
-from .systemproxy import KINDS, active_service, get_proxy, list_services, match_service
+from .systemproxy import active_service, list_services, match_service, proxy_states
 
 
 def _ago(secs: float) -> str:
@@ -178,7 +178,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
-    opened = [s["name"] for s in services if any(get_proxy(s["name"], k)["enabled"] for k in KINDS)]
+    # 一次读回所有网卡的代理设置：走系统 plist（~ms），plist 里没有的网卡才问 networksetup。
+    # 原来这里是"每张网卡 × 每种协议"各调一次 networksetup，7 张网卡就是 21 次、0.6s。
+    states_map = proxy_states(services)
+    opened = [
+        name for name, kinds in states_map.items() if any(p["enabled"] for p in kinds.values())
+    ]
 
     if svc is None:
         line(
@@ -187,7 +192,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     else:
         service = svc["name"]
-        states = {k: get_proxy(service, k) for k in KINDS}
+        states = states_map[service]
         any_on = any(p["enabled"] for p in states.values())
         line("系统代理", ok("已开启") if any_on else bad("未开启"))
         for kind, p in states.items():

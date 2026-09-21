@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .core import IS_MACOS, bad, dim, ok, pad, warn, width
 from .service import service_status
-from .systemproxy import active_service, list_services, proxy_summary, require_macos
+from .systemproxy import active_service, list_services, proxy_states, proxy_summary, require_macos
 
 # ───────────── Linux：网卡与代理现状（nics 用）─────────────
 #
@@ -175,6 +175,7 @@ def cmd_nics(_: argparse.Namespace) -> int:
         return nics_linux()
     require_macos("nics", "它列的是 networksetup 的网络服务")
     services = list_services()
+    states = proxy_states(services)  # 一次读回（plist 优先），别在循环里逐张问
     print(dim("macOS 网卡（start / stop 的参数就是下面的名字，带空格要加引号）"))
     print()
     print(f"    {pad('网卡', 22)}{pad('设备', 10)}{pad('状态', 12)}系统代理")
@@ -188,7 +189,8 @@ def cmd_nics(_: argparse.Namespace) -> int:
             state_cell = dim(state_cell)
         mark = "●" if s["active"] else " "  # ● 标出默认路由走的那张
         print(
-            f"  {mark} {name_cell}{pad(s['device'] or '—', 10)}{state_cell}{proxy_summary(s['name'])}"
+            f"  {mark} {name_cell}{pad(s['device'] or '—', 10)}{state_cell}"
+            f"{proxy_summary(s['name'], states)}"
         )
 
     auto = active_service(services)
