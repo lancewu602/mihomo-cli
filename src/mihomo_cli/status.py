@@ -5,12 +5,12 @@ import argparse
 import re
 import sys
 
-from core import (HOST, IS_MACOS, bad, can_check_listener, dim, note, ok, pad,
+from .core import (HOST, IS_MACOS, bad, can_check_listener, dim, note, ok, pad,
                   proxy_port, read_config, run, size_str, warn)
-from kernel import (api, current_node, find_log_file, listener, mihomo_pid, probe,
+from .kernel import (api, current_node, find_log_file, listener, mihomo_pid, probe,
                     service_status)
-from subs import provider_overview
-from systemproxy import KINDS, active_service, get_proxy, list_services, match_service
+from .subs import provider_overview
+from .systemproxy import KINDS, active_service, get_proxy, list_services, match_service
 
 
 def _ago(secs: float) -> str:

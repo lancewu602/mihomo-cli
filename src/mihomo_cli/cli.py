@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """mihomo-cli —— 管 mihomo：内核服务、系统代理、订阅、规则、geodata 数据。
 
+包内入口（`mihomo_cli/cli.py`）：只管参数解析、子命令表和异常兜底，活都在各模块里。
+两个等价入口：`mihomo-cli`（装包后）/ `python3 -m mihomo_cli`（不装包）。
+
 不带参数 = status（只读）。macOS 用 networksetup 开关系统代理；Linux 按服务端处理：
 start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
 
@@ -14,7 +17,7 @@ start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
     group  [组名] [编号|选项 | --test]  策略组：列组 / 看选项 / 切换 / 测速（选项可报编号）
 
     sub     list|add|nodes|update|rm    订阅：改 proxy-providers 与各组的 use:
-    rules   sync|diff|apply|rollback    片段 → config.yaml 的 rules:（顺序表在 rules.py）
+    rules   sync|diff|apply|rollback    片段 → config.yaml 的 rules:（顺序表在 mihomo_cli/rules.py）
     geodata list|download|apply         geoip.metadb 这类数据文件：看现状 / 下载 / 拷进内核目录
 
 子命令的开关看 `mihomo-cli <命令> --help`。
@@ -22,6 +25,8 @@ start/stop/restart 管 systemd 服务，nics 只读，不设系统代理。
 数据都在 ~/.config/mihomo-cli（rules/ geodata/ state.json backups/；MIHOMO_CLI_DIR 可覆盖）；
 内核配置目录自动探测 ~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo…（MIHOMO_DIR 可覆盖）。
 零第三方依赖，只用标准库；内核由 brew services / systemd 常驻，本工具不自己 fork 进程。
+
+改代码前先看 docs/：control-api.md（控制接口）、packaging.md（安装/打包）、tui.md（交互界面）。
 """
 
 from __future__ import annotations
@@ -30,15 +35,15 @@ import argparse
 import os
 import sys
 
-from core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
-from geodata import FILE_NAMES, MIRRORS, cmd_geodata
-from groups import cmd_group
-from kernel import cmd_logs, cmd_restart
-from nics import cmd_nics
-from rules import cmd_rules
-from status import cmd_status
-from subs import cmd_sub
-from systemproxy import cmd_start, cmd_stop
+from .core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
+from .geodata import FILE_NAMES, MIRRORS, cmd_geodata
+from .groups import cmd_group
+from .kernel import cmd_logs, cmd_restart
+from .nics import cmd_nics
+from .rules import cmd_rules
+from .status import cmd_status
+from .subs import cmd_sub
+from .systemproxy import cmd_start, cmd_stop
 
 
 # ─────────────────────────── 入口 ───────────────────────────
@@ -63,6 +68,24 @@ NO_SERVICE_ARG = {cmd_nics, cmd_rules, cmd_sub, cmd_restart, cmd_geodata, cmd_lo
 
 
 def main(argv: list[str] | None = None) -> int:
+    """入口。异常兜底必须在这里，不能只挂在 `__main__` 分支上。
+
+    pip/uv 生成的 console script 是 `sys.exit(main())`，压根不走 `__main__`——
+    兜底只写在那边的话，`mihomo-cli status | head` 会喷一屏 BrokenPipeError 回溯
+    （已经踩过：直跑脚本没事，装成命令就露）。
+    """
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        return 130
+    except BrokenPipeError:
+        # 输出被 `| head` 这类截断时，别把回溯喷到用户脸上。
+        # 关掉 stdout 再退，否则解释器退出时还会再报一次。
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mihomo-cli",
         # epilog 是手工排的多行，用 Raw 格式化器，别让 argparse 把换行折掉
@@ -71,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         epilog=(
             "常用：start 起内核+代理；rules sync --from <clone> → rules diff → rules apply；\n"
             "sub add <链接>；geodata download → geodata apply。\n"
-            "完整说明见文件头 docstring（python3 -m pydoc mihomo_cli）。"
+            "完整说明见文件头 docstring（python3 -m pydoc mihomo_cli.cli）；\n"
+            "设计说明在仓库 docs/（控制接口 / 打包 / 交互界面）。"
         ),
     )
     sub = parser.add_subparsers(dest="action")
@@ -177,12 +201,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except BrokenPipeError:
-        # 输出被 `| head` 这类截断时，别把一堆 BrokenPipeError 回溯喷到用户脸上。
-        # 关掉 stdout 再退，否则解释器退出时还会再报一次。
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        sys.exit(0)
+    sys.exit(main())

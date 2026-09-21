@@ -11,9 +11,9 @@ import socket
 import struct
 from pathlib import Path
 
-from core import IS_MACOS, bad, dim, ok, pad, warn
-from kernel import service_status
-from systemproxy import active_service, list_services, proxy_summary, require_macos
+from .core import IS_MACOS, bad, dim, ok, pad, warn
+from .kernel import service_status
+from .systemproxy import active_service, list_services, proxy_summary, require_macos
 
 
 # ───────────── Linux：网卡与代理现状（nics 用）─────────────

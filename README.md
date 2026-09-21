@@ -30,7 +30,8 @@ nics [网卡名]            列网卡（macOS 网络服务 / Linux 接口与路�
 start [网卡名]           内核没跑就先交给服务管理器拉起，等端口就绪，再开系统代理
 stop [网卡名]            先关系统代理，再停内核服务
 restart [--keep-log]     重启内核服务让新配置生效；默认顺手清空日志
-status [网卡名]          内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性（默认动作）
+status [网卡名] [--watch]  内核 / 服务 / 端口 / 控制接口 / 系统代理 / 出口 / 连通性
+                          --watch 持续刷新（清屏重画，Ctrl-C 退出）
 
 sub list                 列出订阅：节点数、刷新间隔、挂在哪些组、本地缓存
 sub add <链接>            加订阅，自动挂到带 use: 的代理组
@@ -57,6 +58,22 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 每个子命令的开关：`mihomo-cli <命令> --help`。
 
+`status --watch` 只给终端用（输出接管道会被直接拒绝），Ctrl-C 退出。一帧本身要 2~4 秒
+（`brew services list` 就占 1.6 秒，还有一次穿代理的连通性探测），所以实际刷新周期
+≈ `--interval` + 一帧耗时——页脚会把上一帧的耗时打出来。
+
+## 文档
+
+| 文档 | 什么时候看 |
+|---|---|
+| [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
+| [docs/packaging.md](docs/packaging.md) | 目录结构、安装/打包路线、`console_scripts` 的异常兜底坑 |
+| [docs/tui.md](docs/tui.md) | `status --watch` 的实现与实测耗时、以后上全屏 TUI 的骨架和坑 |
+| [docs/README.md](docs/README.md) | 文档索引与维护约定 |
+
+安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，
+在 `~/.local/share/uv/tools/mihomo-cli/share/doc/mihomo-cli/`）。
+
 ## 数据与配置
 
 - 工具数据在 `~/.config/mihomo-cli/`：`rules/`（规则片段）、`geodata/`（数据实体）、
@@ -64,18 +81,34 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
   环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
   也可以用 `MIHOMO_DIR` 指定。
-- 规则顺序表钉在代码里（`rules.py` 的 `CANONICAL_ORDER`），不依赖外部 order 文件：
+- 规则顺序表钉在代码里（`src/mihomo_cli/rules.py` 的 `CANONICAL_ORDER`），不依赖外部 order 文件：
   「局域网 → 白名单 → 拦截 → 我自己的 → 必须直连 → 必须代理 → 地域大清单 → 兜底」，
   自己的片段永远优先于上游的粗规则。
 
 ## 安装
 
-需要本机已装 mihomo，以及 Python 3.9+：
+需要本机已装 mihomo，以及 Python 3.9+。
+
+**推荐：装成独立命令**（跟系统 Python 解耦，也方便以后升级）——本工具零第三方依赖，
+装它不会往环境里拖任何东西：
 
 ```bash
-git clone git@github.com:lancewu602/mihomo-cli.git
-ln -sf "$PWD/mihomo-cli/mihomo_cli.py" /usr/local/bin/mihomo-cli
+git clone git@github.com:lancewu602/mihomo-cli.git && cd mihomo-cli
+uv tool install .          # 或者 pipx install .
+uv tool upgrade mihomo-cli # 更新
+```
 
+**不想装包管理器**：直接 symlink 仓库根的 `mihomo-cli` shim（模块已在 `src/mihomo_cli/` 包里，
+包内文件不能直接 symlink，原因写在 `docs/packaging.md`）：
+
+```bash
+ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli
+PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装：在仓库目录里这么跑（src 布局要带 PYTHONPATH）
+```
+
+然后：
+
+```bash
 # macOS
 brew install mihomo && mihomo-cli start
 
@@ -84,6 +117,10 @@ sudo dpkg -i mihomo-linux-amd64-*.deb
 sudo systemctl enable --now mihomo
 mihomo-cli sub add <订阅链接> && mihomo-cli start
 ```
+
+> 源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，
+> 没有清单要维护；入口是 `mihomo_cli.cli:main`。为什么要多一层 `src/`、代价是什么，
+> 写在 `docs/packaging.md`。
 
 ## License
 

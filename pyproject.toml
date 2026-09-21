@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]        # 77+ 才有 SPDX 形式的 license 字段
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mihomo-cli"
+version = "0.1.0"
+description = "管 mihomo（Clash.Meta 内核）的命令行工具：内核服务、系统代理、订阅、规则、geodata、策略组、日志"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+# 零第三方依赖：装它不会往环境里拖任何东西。以后真要上 TUI（textual 这类），
+# 加 [project.optional-dependencies] 的 extra，别把它变成默认依赖。
+dependencies = []
+keywords = ["mihomo", "clash", "clash-meta", "proxy", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/lancewu602/mihomo-cli"
+
+[project.scripts]
+mihomo-cli = "mihomo_cli.cli:main"
+
+# 真的包目录，不是平铺模块：新增模块直接往 src/mihomo_cli/ 里放、用相对 import 就完事，
+# 不用再维护模块清单（平铺布局那个 py-modules 清单漏一个就 ImportError）。
+# src 布局：包在 src/ 下，仓库根不是 import 根 —— 在仓库里能跑起来的，只可能是装好的那份，
+# 这样“本地能跑、装完缺文件”才藏不住。
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["mihomo_cli"]
+
+# 文档跟着包走：装到 <前缀>/share/doc/mihomo-cli/。
+# 分两个键是故意的：data-files 会扁平化，docs/README.md 跟仓库 README.md 同名，
+# 挤到同一个目录会互相覆盖（谁活下来看遍历顺序）。
+# sdist 那份由 MANIFEST.in 管；两边都要维护。
+[tool.setuptools.data-files]
+"share/doc/mihomo-cli" = ["README.md", "LICENSE"]
+"share/doc/mihomo-cli/docs" = ["docs/*.md"]

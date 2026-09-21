@@ -15,10 +15,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from core import (HOST, MIHOMO_DIR, RESTART_HINT, api, bad, commit_config, config_path,
+from .core import (HOST, MIHOMO_DIR, RESTART_HINT, api, bad, commit_config, config_path,
                   controller_put, die, dim, listener, ok, pad, proxy_port,
                   reload_config, require_config, size_str, warn, width)
-from kernel import mihomo_pid
+from .kernel import mihomo_pid
 
 
 # ───────────────────── 订阅：proxy-providers ─────────────────────

@@ -18,7 +18,7 @@ import time
 import urllib.error
 from pathlib import Path
 
-from core import (BACKUP_DIR, IS_MACOS, MIHOMO_DIR, RESTART_HINT, TOOL_DIR, bad, die, dim,
+from .core import (BACKUP_DIR, IS_MACOS, MIHOMO_DIR, RESTART_HINT, TOOL_DIR, bad, die, dim,
                   http_get, ok, pad, read_config, reload_config, require_config, size_str,
                   warn)
 

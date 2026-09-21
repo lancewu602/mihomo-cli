@@ -9,9 +9,9 @@ import json
 import re
 import time
 
-from core import (HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_port,
+from .core import (HOST, IS_MACOS, STATE_FILE, bad, die, dim, note, ok, proxy_port,
                   run, warn)
-from kernel import ensure_kernel_up, probe, service_manager, stop_kernel
+from .kernel import ensure_kernel_up, probe, service_manager, stop_kernel
 
 
 # 开代理时写入的绕过列表：这些地址根本不发给 mihomo（跟顺序表第 1 条 LocalAreaNetwork 对齐）。

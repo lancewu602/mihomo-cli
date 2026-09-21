@@ -10,7 +10,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from core import (BACKUP_DIR, RESTART_HINT, TOOL_DIR, bad, backup_config, config_path,
+from .core import (BACKUP_DIR, RESTART_HINT, TOOL_DIR, bad, backup_config, config_path,
                   die, dim, fmt_ts, list_backups, ok, reload_config, require_config,
                   run, size_str, validate_config, warn)
 

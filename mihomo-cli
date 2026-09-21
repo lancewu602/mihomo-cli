@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""不装包也能用的入口：把这个文件 symlink 到 PATH 里就行。
+
+    ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli
+
+它只干一件事——把 `src/` 塞进 sys.path，然后交给真正的入口 `mihomo_cli.cli.main()`。
+
+为什么不直接 symlink 包里的文件：包内的相对 import 需要解释器以包的形式加载它
+（`__package__` 有值），直接执行文件时 `__package__` 是空的，`from .core import ...` 会炸。
+为什么是 src/ 而不是仓库根：包在 src 布局里（见 docs/packaging.md），仓库根本来就不是
+import 根，硬塞进去等于把"测的其实是源码目录"这个坑又打开。
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+# symlink 进 PATH 时 __file__ 是链接本身，realpath 才能找到仓库的真实位置
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "src"))
+
+from mihomo_cli.cli import main        # noqa: E402  必须在 sys.path 之后才 import
+
+if __name__ == "__main__":
+    sys.exit(main())

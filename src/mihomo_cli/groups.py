@@ -8,8 +8,8 @@ import argparse
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
-from core import TEST_URL, api, api_raw, bad, die, dim, ok, pad, proxy_port, width
-from kernel import GROUP_TYPES, current_node, node_delay, probe, provider_nodes, provider_of
+from .core import TEST_URL, api, api_raw, bad, die, dim, ok, pad, proxy_port, width
+from .kernel import GROUP_TYPES, current_node, node_delay, probe, provider_nodes, provider_of
 
 # url-test / fallback 这些是"自己测速挑"，跟 select 的"手动选"区别就在这
 AUTO_TYPES = {"URLTest", "Fallback", "LoadBalance", "Relay"}

@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from core import (HOST, IS_MACOS, MIHOMO_BIN, PROBE_TIMEOUT, RESTART_HINT, SERVICE_HINT,
+from .core import (HOST, IS_MACOS, MIHOMO_BIN, PROBE_TIMEOUT, RESTART_HINT, SERVICE_HINT,
                   TEST_URL, api, bad, can_check_listener, die, dim, listener, ok, proxy_port,
                   read_config, run, size_str, warn)
 

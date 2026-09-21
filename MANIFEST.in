@@ -1,0 +1,9 @@
+# sdist 的清单。setuptools 默认只会塞模块和元数据，docs/ 不会自己进去——必须显式列。
+# wheel 那份由 pyproject.toml 的 [tool.setuptools.data-files] 负责。
+# mihomo-cli 是仓库根的 shim（不装包时 symlink 用的那个），也带上，方便直接从 sdist 里 symlink。
+
+include README.md
+include LICENSE
+include pyproject.toml
+include mihomo-cli
+recursive-include docs *.md

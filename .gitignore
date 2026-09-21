@@ -4,6 +4,11 @@ __pycache__/
 .venv/
 venv/
 
+# 打包产物（uv build / pip install . 会生成）
+build/
+dist/
+*.egg-info/
+
 # macOS
 .DS_Store
 
