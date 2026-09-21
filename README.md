@@ -50,16 +50,17 @@ nic [网卡名]            固定系统代理用哪张网卡（**仅 macOS**）�
 sub set <链接>           设置订阅链接（**只支持一个**）：没设过就写进 config.yaml 的 proxy-providers，
                          再补一份骨架（只在缺的时候补，你自己的组/规则/设置一律不碰）：
                          两个组 `节点选择`（select，默认选中自动组）+ `自动选择`（url-test）、
-                         三条分流规则（`GEOSITE,private,DIRECT` / `GEOSITE,category-ads-all,REJECT` /
-                         `GEOSITE,cn,DIRECT`）+ 兜底 `MATCH,节点选择`、以及
-                         九个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
+                         六条分流规则（private / category-ads-all / cn / gfw / 学术 / AI）
+                         + 兜底 `MATCH,DIRECT`（**默认黑名单模式**：只有这几类走代理，其余直连）、
+                         以及九个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
                          `external-controller` / `unified-delay` / `tcp-concurrent` /
                          `geodata-mode: true` / geodata 自动更新两项，以及两项 `geox-url`
                          （geosite / geoip 都走 Loyalsoldier/v2ray-rules-dat）、
                          `profile.store-selected`）；
                          链接变了就把旧的整块丢掉、新的全量接管，链接没变则一个字节都不改、
                          只让内核重拉节点（唯一的例外：老配置里缺的全局设置和规则会补上——
-                         只补缺的，写一次就安静）；设置前先自己拉一遍确认链接可用（--force 跳过）
+                         只补缺的、**绝不改末尾那条兑底 MATCH**，写一次就安静）；
+                         设置前先自己拉一遍确认链接可用（--force 跳过）
 sub update               更新节点信息：让内核当场重拉（链接不变，不碰配置文件）
 sub show                 看当前订阅：链接、缓存文件、挂在哪个组、内核那边多少节点（默认动作）
 sub nodes [--delay]      列当前订阅的节点：**序号** / 名字 / 类型 / 延迟；`●` 标出当前出口，
@@ -83,13 +84,6 @@ config allow-lan <值>    允许其他设备经代理端口上网：true / false
                          落盘保证重启后还是这个值，PATCH 保证现在这一刻就生效；
                          allow-lan 会把代理端口从 127.0.0.1 改成绑所有网卡（实测当场就重新绑上），
                          等于把代理给整个局域网，只在自己信得过的网络里开
-config default <值>      兜底规则走哪（rules 里那条 MATCH）：
-                         proxy  = MATCH,节点选择（白名单反选：除内网/广告/国内，其余全走代理）
-                         direct = MATCH,DIRECT（黑名单：只有 rules 里列出来的走代理）
-                         **只改那一行**（兜底指向自定义组时不动、只提醒）；因为 rules 是内核
-                         启动时读一次的、没有热重载，所以要重启内核（不像上面三项能 PATCH）；
-                         这个选择会记进 `~/.config/mihomo-cli/default`——reset 把配置清成
-                         最小骨架后，sub set 重建骨架时按它把兜底写回去
 
 nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
 status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
@@ -108,7 +102,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 | 文档 | 什么时候看 |
 |---|---|
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
-| [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/三条规则（为何选 v2ray-rules-dat）/geodata 设置是怎么来的 |
+| [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/六条规则（为何选 v2ray-rules-dat、为何是黑名单模式）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
 | [docs/lifecycle.md](docs/lifecycle.md) | 系统代理怎么开关（start/stop 顺带管）、网卡怎么选、两层之间那两条不变式 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
@@ -119,8 +113,8 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 ## 数据与配置
 
 - 工具数据在 `~/.config/mihomo-cli/`：`state.json`（macOS 系统代理的原状态）、`nic`（`mihomo-cli nic`
-  固定的那张网卡，单独一个文件）、`default`（兜底规则走代理还是直连，`mihomo-cli config default` 写）、
-  `backups/`（写配置前的备份，留最近 5 份；`reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
+  固定的那张网卡，单独一个文件）、`backups/`（写配置前的备份，留最近 5 份；`reset --hard` 会删掉它）；
+  环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
   也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，唯一的写操作是 `sub set`：
   只动 `proxy-providers` 里的 `airport`、引用它的组，以及**缺失时才补**的那几条（分流规则、

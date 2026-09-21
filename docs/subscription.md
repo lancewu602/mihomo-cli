@@ -53,7 +53,7 @@ invalid choice，不给“改叫 xxx”的指路）。
 
 **没设过**：写 provider 块，然后保证有组用得上它。找组的顺序是：已经有组 `use:` 里含 `airport`
 → 什么都不动；有名为 `节点选择` 的组 → 只给它补 `use:`，别的字段一个不碰（**不新建组**）；
-都没有 → 新建**两个**组（下面这段），并在没有 MATCH 规则时补一条 `MATCH,节点选择`。
+都没有 → 新建**两个**组（下面这段），并在没有 MATCH 规则时补一条 `MATCH,DIRECT`（黑名单模式的兜底）。
 **已有 MATCH 规则指向别的组时不抢**，只打印一句提示——偷偷改用户的规则比不改更糟。
 这一条路（以及下面「链接变了」那条）每次都会顺带跑一遍全局设置：缺的补、已有的不碰。
 
@@ -110,15 +110,22 @@ proxy-groups:
     tolerance: 50
 ```
 
-**三条分流规则 + 兜底 MATCH**（顺序就是匹配顺序，分流规则必须在 MATCH 之前）：
+**六条分流规则 + 兜底 MATCH——默认是黑名单模式**（顺序就是匹配顺序，兜底那条必须在最后）：
 
 ```yaml
 rules:
-  - GEOSITE,private,DIRECT          # 局域网 / 私有地址直连（131 条）
-  - GEOSITE,category-ads-all,REJECT # 广告域名拦截（190,384 条，见下）
-  - GEOSITE,cn,DIRECT               # 国内域名直连（按域名判定，不触发 DNS 解析）
-  - MATCH,节点选择                   # 其余走代理
+  - GEOSITE,private,DIRECT                  # 局域网 / 私有地址直连（131 条）
+  - GEOSITE,category-ads-all,REJECT         # 广告域名拦截（190,384 条，见下）
+  - GEOSITE,cn,DIRECT                       # 国内域名直连（111,177 条）
+  - GEOSITE,gfw,节点选择                     # 经典被墙站走代理（4,365 条）
+  - GEOSITE,category-scholar-!cn,节点选择    # 海外学术站（476 条，arxiv / sci-hub 这类）
+  - GEOSITE,category-ai-!cn,节点选择          # 海外 AI 站合集（182 条）
+  - MATCH,DIRECT                            # ← 其余全部直连（黑名单模式）
 ```
+
+**为什么要改成黑名单模式**（骨架原本是 `MATCH,节点选择` 的白名单反选）：白名单反选把所有国外
+域名都送进代理，包括那些本来就能直连的（微软/苹果的下载、国外小众站），又慢又费流量；黑名单
+只让「确实被墙」的那几类走代理。代价是**漏名单 = 直连**，见下面那段。
 
 **全局设置：九个标量 + 两个嵌套节**（插在 `mixed-port` 后面；每一项都是独立的顶层键，已有就不碰）：
 
@@ -186,34 +193,40 @@ profile:
   （`节点选择`）就只补一行 `use:`；没有就只写 provider，并提示“没有任何组在用这个订阅，节点
   不会被用到”。这是为了让“只管一个订阅”的边界清楚：你的组是你的。
 - **规则只在能确认是自己写的骨架时才动**（`_ensure_rules()`）：rules 里要么空着，要么**只有一条**
-  `MATCH,节点选择`（或 `MATCH,DIRECT`，见下面「兑底走哪」），要么**正好是历史版本写出来的那套骨架**
-  （`LEGACY_SPLIT_RULES`：v1 = 只有 `GEOSITE,cn,DIRECT`，v0 = 一条规则都没有）。有任何别的规则
-  就一个字节不碰——那是你自己的分流。所以装上订阅之后想再加 `GEOIP,CN`、`GEOSITE,gfw`、自定义
-  `DOMAIN-SUFFIX,…`，直接往 `rules` 里写就是，工具以后不会去动它们。
+  `MATCH`（`MATCH,DIRECT` 或 `MATCH,节点选择`），要么**正好是历史版本写出来的那套骨架**
+  （`LEGACY_SPLIT_RULES`：v3 = private / ads / cn 三条，v2 = 只有 `GEOSITE,cn,DIRECT`，
+  v1 = 一条规则都没有）。有任何别的规则就一个字节不碰——那是你自己的分流。所以装上订阅之后想再加
+  `GEOIP,CN`、`GEOSITE,geolocation-!cn`、自定义 `DOMAIN-SUFFIX,…`，直接往 `rules` 里写就是，
+  工具以后不会去动它们。
   故意**不**认「骨架里被删掉一条」的情形（比如你不想拦广告、把 `category-ads-all` 那条删了）：
   那跟老骨架长得一模一样，分不清；宁可一个字节不动，也不能把你删掉的拦截规则偷偷加回去。
-- **兜底走哪：`mihomo-cli config default proxy|direct`**。骨架最后那条 MATCH 决定了整份配置的模式：
+- **骨架默认是黑名单模式，末尾写死 `MATCH,DIRECT`**。这条兜底决定了整份配置的模式：
   `MATCH,节点选择` = 白名单反选（除内网/广告/国内，其余全走代理）；`MATCH,DIRECT` = 黑名单
-  （只有 rules 里列出来的走代理，其余直连）。与上面三项不同：
-  - 它改的不是顶层标量，而是 `rules:` 里那条 MATCH；
-  - **rules 是内核启动时读一次的、没有热重载**，所以这一步会顺手重启内核（不像 `config mode`
-    能用 PATCH 当场生效）；
-  - 兜底指向**自定义组**时（`MATCH,MY_GROUP`）命令不动它、只提醒——那是你的目标，不是我们的；
-  - 这个选择会记进 `~/.config/mihomo-cli/default`。**为什么要记**：`reset` 会把 `config.yaml`
-    清成最小骨架（reset 故意不落备份）、`sub set` 再重建骨架——不记的话重建出来永远是
-    `MATCH,节点选择`。实测踩到过：黑名单那几行被 reset 吃掉，`sub set` 又把白名单兑底写回去，
-    用户看到的就是「我明明是黑名单模式，怎么变回去了」。记下之后 `reset` → `sub set` 会按偏好
-    写回兑底；万一文件里那条 MATCH 跟偏好不一致（比如手改、或者从旧备份拷回来），`sub set` 会
-    提醒一句但**不偷偷改**（想对齐就再跑一次 `config default <偏好>`）。
-- **三条规则的分工**（都是按**域名**判定，不触发 DNS 解析，所以没有 `GEOIP,CN` 那个
+  （只有 rules 里列出来的走代理）。选黑名单是因为白名单反选会把本来能直连的国外域名也绕一圈；
+  代价是**漏名单 = 直连**，而本机 DNS 通常被污染（实测 `www.google.com` / `www.youtube.com`
+  都解析到 `157.240.7.20`），表现就是「打不开」。两条路：
+  发现漏了就加一条（放在 `MATCH` 前面）；或者干脆换成 `GEOSITE,geolocation-!cn,节点选择`
+  （27,248 条 = 所有非中国大陆，等于白名单反选）。
+- **老配置不会被自动换模式**。升级只「补缺的规则」，**绝不改末尾那条 MATCH**——兜底决定走不走
+  代理，替用户改这个就是改分流行为。所以从上一版（白名单骨架 `MATCH,节点选择`）升上来的配置，
+  跑 `sub set` 只会把缺的 `gfw` / 学术 / AI 三条补进去（在白名单模式下它们本来就是冗余的，
+  不影响结果），模式还是它的。想换黑名单自己把末尾那行改成 `MATCH,DIRECT`（或者删掉 rules
+  里的内容再 `sub set` 按新骨架重建）。
+- **六条规则的分工**（都是按**域名**判定，不触发 DNS 解析，所以没有 `GEOIP,CN` 那个
   「域名被解析成海外 IP、结果没直连」的坑，手册在 rules 那页专门提了这件事）：
   - `GEOSITE,private,DIRECT`（131 条）：局域网 / 私有地址送去代理没有意义；
   - `GEOSITE,category-ads-all,REJECT`（**190,384 条**）：**这条是换到 v2ray-rules-dat 之后
     白拿的**——那份 `geosite.dat` 把 EasyList + EasyListChina + AdGuard DNS Filter +
-    Peter Lowe + Dan Pollock 全并进了这个类別（README 里写明），而 MetaCubeX 那份同名类別
+    Peter Lowe + Dan Pollock 全并进了这个类别（README 里写明），而 MetaCubeX 那份同名类别
     只有 911 条。实测 `www.doubleclick.net` / `www.googleadservices.com` 都被 `REJECT`；
-  - `GEOSITE,cn,DIRECT`（111,177 条）：国内直连。
-  代价是只覆盖域名类请求，直连 IP 的请求仍会走代理（真在意就自己加一条 `GEOIP,CN,DIRECT`）。
+  - `GEOSITE,cn,DIRECT`（111,177 条）：国内直连；
+  - `GEOSITE,gfw,节点选择`（4,365 条）：经典被墙站。实测 `google.com` / `youtube.com` /
+    `openai.com` / `chatgpt.com` / `t.me` / `github.com` / `netflix.com` / `spotify.com` 都在里面，
+    `arxiv.org` **不在**（所以下面单独一条）；
+  - `GEOSITE,category-scholar-!cn,节点选择`（476 条）：海外学术站，补 `gfw` 的缺口；
+  - `GEOSITE,category-ai-!cn,节点选择`（182 条）：海外 AI 站合集，给新出的小站兜底。
+  - 代价是只覆盖**域名**类请求：直接用 IP 访问的请求没有域名可匹配，会落到末尾的 `MATCH,DIRECT`
+    上直连（想让国内 IP 也直连/或想兜住，加一条 `GEOIP,CN,DIRECT`）。
 - **插入时会跟已有项对齐缩进**：同一个 YAML 序列里混缩进（比如已有组/规则是 4 空格、工具插的
   是 2 空格）会让整份配置**直接解析失败**——实测踩过，现在按已有项量出来的缩进走。
 
@@ -328,15 +341,23 @@ rules 里也没 `private` / `category-ads-all`）时走一次写盘：备份 →
 订阅块（`proxy-providers` 里那个 `airport`）全程一个字节也没动。
 
 实测（拿一份老配置：`geox-url` 是旧值 + rules 只有 `GEOSITE,cn,DIRECT` + `MATCH,节点选择`，
-同一个链接再跑 `sub set`）——只动了这两处，`geox-url` 旧值一个字节没变：
+同一个链接再跑 `sub set`）——只动了这两处，`geox-url` 旧值一个字节没变，**末尾那条兑底也没
+被碰**（它仍是 `MATCH,节点选择`，即老配置继续跑白名单模式）：
 
 ```diff
   2a3
   > geodata-mode: true
-  46a47,48
+  43a45,46
   >   - GEOSITE,private,DIRECT
   >   - GEOSITE,category-ads-all,REJECT
+  44a48,50
+  >   - GEOSITE,gfw,节点选择
+  >   - GEOSITE,category-scholar-!cn,节点选择
+  >   - GEOSITE,category-ai-!cn,节点选择
 ```
+
+想看新骨架长什么样：把 `rules` 那几行删掉（或整个 `rules:` 一节）再跑 `sub set`，会按新骨架
+重建（六条规则 + `MATCH,DIRECT`）；`reset` 后再 `sub set` 也一样。
 
 ## 生效方式：重启内核，不是热重载
 
@@ -420,7 +441,13 @@ proxy-groups:
     tolerance: 50
 
 rules:
-  - MATCH,节点选择
+  - GEOSITE,private,DIRECT
+  - GEOSITE,category-ads-all,REJECT
+  - GEOSITE,cn,DIRECT
+  - GEOSITE,gfw,节点选择
+  - GEOSITE,category-scholar-!cn,节点选择
+  - GEOSITE,category-ai-!cn,节点选择
+  - MATCH,DIRECT
 ```
 
 url 一律加双引号：机场链接里 `?`、`&`、`#` 都常见，plain 标量会在 ` #` 处被当成注释截断。

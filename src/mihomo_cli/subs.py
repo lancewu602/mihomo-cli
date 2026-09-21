@@ -29,7 +29,6 @@ from .core import (
     FALLBACK_PORT,
     RESTART_HINT,
     TEST_URL,
-    TOOL_DIR,
     api,
     api_raw,
     bad,
@@ -72,32 +71,59 @@ AUTO_GROUP_NAME = "自动选择"  # 副组（url-test）：自己按延迟挑最
 GROUP_URL_INTERVAL = 300  # url-test 的测速间隔（秒），跟 provider 的 health-check 保持一致
 GROUP_TOLERANCE = 50  # url-test 的切换容差（ms）：比当前最快的慢这么多才换，免得来回跳
 
-# 建骨架时补的分流规则，插在兜底 `MATCH,节点选择` **之前**（顺序就是匹配顺序，很重要）。
-# 三条都是按域名判定（GEOSITE）：不触发 DNS 解析，所以没有 GEOIP 那个「域名被解析成海外 IP、
+# 建骨架时写的分流规则（顺序就是匹配顺序，很重要）。**骨架默认是黑名单模式**：
+# 只有下面这几条命中的走代理，其余（末尾那条 `MATCH,DIRECT`）全部直连。
+#
+# 全按域名判定（GEOSITE）：不触发 DNS 解析，所以没有 GEOIP 那个「域名被解析成海外 IP、
 # 结果没直连」的坑；代价是只要 GeoSite.dat 一个数据文件（下面 GEOX_MIRROR 那份里就有）。
 #
-# 为什么是这三条（数据是拿现配置实测的，见 docs/subscription.md）：
+# 为什么是这六条（记录数都是拿现配置实测的，见 docs/subscription.md）：
 #   · private → DIRECT：局域网 / 私有地址不该送去代理（131 条）；
-#   · category-ads-all → REJECT：**这条是换到 v2ray-rules-dat 之后白拿的**——那份
-#     geosite.dat 把 EasyList + EasyListChina + AdGuard DNS Filter + Peter Lowe + Dan Pollock
-#     全并进了这个类别，实测 190,384 条（MetaCubeX 那份只有 911 条）；
-#   · cn → DIRECT：国内直连，111,177 条。
-# 想要更全（`GEOIP,CN` 兜底要 geoip.dat，见 geodata-mode）、或者要别的分流（`GEOSITE,gfw`、
-# `GEOSITE,geolocation-!cn`），自己往 rules 里加就行：本工具只在「rules 为空、只有自己那条
-# MATCH、或者前面正好是本工具规则的前缀（老版本建的骨架）」时才动手。
+#   · category-ads-all → REJECT：**换到 v2ray-rules-dat 之后白拿的**——那份 geosite.dat 把
+#     EasyList + EasyListChina + AdGuard DNS Filter + Peter Lowe + Dan Pollock 全并进了这个
+#     类别，实测 190,384 条（MetaCubeX 那份同名类别只有 911 条）；
+#   · cn → DIRECT：国内直连，111,177 条；
+#   · gfw → 节点选择：经典被墙站（4,365 条）。实测 google / youtube / openai / telegram /
+#     github / netflix / spotify 等都在里面（arxiv 不在，所以下面单独列一条）；
+#   · category-scholar-!cn → 节点选择：海外学术站（476 条，arxiv / sci-hub 这类）；
+#   · category-ai-!cn → 节点选择：海外 AI 站合集（182 条），新出的小站兜个底。
+#
+# 两个要记住的后果（黑名单模式的固有代价）：
+#   1. **漏名单 = 直连**。被墙但没列进来的域名会直连，而本机 DNS 往往被污染（实测
+#      www.google.com / www.youtube.com 都解析到 157.240.7.20），表现就是超时打不开。
+#      发现漏了就往 rules 里加一条（放在 `MATCH,DIRECT` 前面）；想省事也可以直接换成
+#      `GEOSITE,geolocation-!cn,节点选择`（27,248 条 = 所有非中国大陆，等于白名单反选）。
+#   2. 不写/删掉末尾那条 `MATCH` 时，内核的隐式兜底也是直连——但显式写出来更清楚。
+#
+# 想改这份骨架：已有规则一律不碰（见 _ensure_rules），你自己往 rules 里加/删/改就行。
 SPLIT_RULES = [
     ("GEOSITE,private", "DIRECT"),
     ("GEOSITE,category-ads-all", "REJECT"),
     ("GEOSITE,cn", "DIRECT"),
+    ("GEOSITE,gfw", GROUP_NAME),
+    ("GEOSITE,category-scholar-!cn", GROUP_NAME),
+    ("GEOSITE,category-ai-!cn", GROUP_NAME),
 ]
-# 本工具历史上写出来过的骨架形状（**不含**兜底 MATCH），按时间顺序排。升级路径靠它：
-# 认出「原样」的老骨架，就把缺的规则插到正确位置（跟「链接没变也要补缺的全局键」一个道理）。
+# 骨架末尾那条兜底。写死成 DIRECT（黑名单模式）：只有上面几条命中的走代理。
+SKELETON_MATCH = "DIRECT"
+
+# 本工具历史上写出来过的骨架形状（**不含**末尾那条兜底 MATCH），按时间顺序排。
+#
+# 升级路径靠它：认出「原样」的老骨架，就把缺的规则补进 rules——**但绝不改兜底那条 MATCH**。
+# 因为兜底决定模式（走代理 = 白名单反选 / 直连 = 黑名单），替用户改这个就是改分流行为，
+# 比不改更糟；所以老配置只会「补几条规则」，模式仍由它自己那条 MATCH 决定。
 # 故意**不**认「自己删掉一条的骨架」：那跟老骨架长得一模一样，分不清；用户手工删掉某条
 # （比如不想拦广告）时宁可一个字节不动，也不能偷偷给他加回去。以后骨架再长，
 # 把变化前的那份 SPLIT_RULES 追加到这个列表里就行。
 LEGACY_SPLIT_RULES = [
     [],  # v1：rules 里只有兜底 MATCH
     [("GEOSITE,cn", "DIRECT")],  # v2：只有国内直连那一条
+    # v3（上一版，白名单模式）：private / ads / cn 三条 + 兜底 MATCH,节点选择
+    [
+        ("GEOSITE,private", "DIRECT"),
+        ("GEOSITE,category-ads-all", "REJECT"),
+        ("GEOSITE,cn", "DIRECT"),
+    ],
 ]
 
 # 建骨架时要补的全局标量（顶层键 + 值）。顺序就是写进配置里的顺序，大致跟手册 general 那页
@@ -600,127 +626,11 @@ def _our_provider(lines: list[str], strict: bool = True) -> dict | None:
     return next((p for p in _providers(lines, strict=strict) if p["name"] == SUB_NAME), None)
 
 
-# ─────────────────── 兜底规则走代理还是直连 ───────────────────
-#
-# 骨架最后那条 MATCH 决定整份配置的模式：
-#   MATCH,节点选择 → 白名单反选：除内网/广告/国内，其余全走代理
-#   MATCH,DIRECT   → 黑名单：只有 rules 里列出来的走代理，其余直连
-#
-# 这一项跟 `config` 那三项不同：它不在 config.yaml 的顶层，而是 `rules:` 里那条 MATCH；
-# 而且 rules 是**启动时读一次**的，改完必须重启内核（没有 PATCH 热改）。
-#
-# 为什么要记在工具目录：`reset` 会把 config.yaml 清成最小骨架、`sub set` 再重建骨架——
-# 重建时得知道用户的兜底选择。不记的话就是「我明明是黑名单模式，reset 一下变回白名单了」
-# （2026-09-21 实测踩到：黑名单那几行被 reset 吃掉，sub set 又把 MATCH,节点选择 写回去）。
-FALLBACK_FILE = TOOL_DIR / "default"
-FALLBACK_TARGETS = {"proxy": GROUP_NAME, "direct": "DIRECT"}
-
-
-def fallback() -> str:
-    """兜底走哪：`proxy` / `direct`。没记过就 `proxy`（本工具一贯的默认）。"""
-    try:
-        v = FALLBACK_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        return "proxy"
-    return v if v in FALLBACK_TARGETS else "proxy"
-
-
-def fallback_target() -> str:
-    """兜底规则的目标：`节点选择` 或 `DIRECT`。"""
-    return FALLBACK_TARGETS[fallback()]
-
-
 def _our_match_items() -> set[str]:
-    """本工具写过的兜底 MATCH 行（当前偏好 + 历史的 `MATCH,节点选择`）。
+    """本工具写过的兜底 MATCH 行：现在的 `MATCH,DIRECT`（黑名单）与历史的 `MATCH,节点选择`。
 
-    `MATCH,DIRECT` 要多一道「偏好确实是 direct」的门——不然用户自己手写的黑名单兜底会被
-    当成我们的骨架（那种配置挺常见）。"""
-    mine = {f"MATCH,{GROUP_NAME}"}
-    if fallback() == "direct":
-        mine.add("MATCH,DIRECT")
-    return mine
-
-
-def _remember_fallback(which: str) -> None:
-    try:
-        FALLBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
-        FALLBACK_FILE.write_text(which + "\n", encoding="utf-8")
-    except OSError as e:
-        die(f"写 {FALLBACK_FILE} 失败：{e}")
-
-
-def fallback_state(lines: list[str]) -> tuple[str, str | None]:
-    """(工具记的偏好, 文件里兜底 MATCH 的目标或 None)。给 `config` 看现状用。"""
-    match = _match_rule(lines)
-    return fallback(), (match[1] if match else None)
-
-
-def _tail_comment(line: str) -> str:
-    """行尾注释（含前面那几个空格，原样留着）。"""
-    m = re.search(r"[ \t]#", line)
-    return line[m.start() :].rstrip("\n") if m else ""
-
-
-def _rewrite_fallback(lines: list[str], target: str) -> tuple[list[str], bool]:
-    """把兜底 MATCH 换成 target。返回 (给用户看的说明, 有没有改过 lines)。
-
-    只动三种现状：没有 MATCH（补一条）、兜底是 `节点选择`、兜底是 `DIRECT`。
-    兜底指向别的组（用户自己接的目标）时**不动**，只提示——那是他的目标，不是我们的。"""
-    match = _match_rule(lines)
-    if match is None:
-        span = _section_span(lines, "rules")
-        if span is None:
-            _new_section(lines, "rules:", [f"  - MATCH,{target}\n"])
-            return [dim(f"规则      原来没有兜底，补了 MATCH,{target}")], True
-        _reject_flow(lines, span[0], "rules")
-        rows = _rule_line_indices(lines)
-        at = rows[-1] + 1 if rows else span[1]  # 兜底必须在最后
-        row = lines[rows[0]] if rows else "  - x\n"
-        indent = row[: len(row) - len(row.lstrip())]
-        lines[at:at] = [f"{indent}- MATCH,{target}\n"]
-        return [dim(f"规则      原来没有兜底，补了 MATCH,{target}（放最后）")], True
-
-    at, cur = match
-    if cur == target:
-        return [dim(f"规则      兜底已经是 MATCH,{target}，没动")], False
-    if cur not in FALLBACK_TARGETS.values():
-        return [
-            warn(
-                f"⚠ 规则      兜底是 MATCH,{cur}（不是本工具写的），没动它；"
-                f"想换成 MATCH,{target} 就自己改那一行"
-            )
-        ], False
-    old = lines[at]
-    indent = old[: len(old) - len(old.lstrip())]
-    lines[at] = f"{indent}- MATCH,{target}{_tail_comment(old)}\n"
-    return [dim(f"规则      兜底 MATCH,{cur} → MATCH,{target}")], True
-
-
-def cmd_default_fallback(which: str) -> int:
-    """`config default proxy|direct`：切换兜底规则走代理还是直连。
-
-    rules 不是热配置（内核启动时读一次），所以这一步**必须重启内核**才生效——
-    跟 `config mode` 那种 PATCH 当场生效的不一样。"""
-    cfg = require_config()
-    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
-    target = FALLBACK_TARGETS[which]
-    if which == "proxy" and GROUP_NAME not in group_names(lines):
-        die(
-            f"配置里没有 {GROUP_NAME} 这个组，兜底指不过去（`mihomo -t` 会报 proxy not found）。\n"
-            f"  先建骨架：mihomo-cli sub set <订阅链接>"
-        )
-    notes, changed = _rewrite_fallback(lines, target)
-    for note in notes:
-        print(note)
-    if not changed:
-        _remember_fallback(which)  # 现状就是它，也把偏好记上（下次 reset 重建时用）
-        return 0
-    if not commit_config(cfg, lines, f"兜底规则：MATCH,{target}"):
-        return 1
-    _remember_fallback(which)
-    print(dim(f"  记进 {FALLBACK_FILE}：reset 之后 sub set 重建骨架会按它写回兜底"))
-    print(dim("  rules 是内核启动时读的、没有热重载 → 顺手重启一下内核"))
-    return _after_write(note="下次启动内核时生效")
+    只认这两条，是为了认自己写的骨架；用户手写的 `MATCH,PROXY` 之类一律不算我们的。"""
+    return {f"MATCH,{SKELETON_MATCH}", f"MATCH,{GROUP_NAME}"}
 
 
 def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
@@ -744,13 +654,13 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
     note: list[str] = []
 
     if items == []:  # 没有规则（或 rules 里全是注释）：把整套骨架补上
-        block = [*_split_rule_lines(), f"  - MATCH,{fallback_target()}\n"]
+        block = [*_split_rule_lines(), f"  - MATCH,{SKELETON_MATCH}\n"]
         if (rspan := _section_span(lines, "rules")) is not None:
             _reject_flow(lines, rspan[0], "rules")
             lines[rspan[1] : rspan[1]] = block
         else:
             _new_section(lines, "rules:", block)
-        return [dim(f"规则      补了 {_rule_names()} + MATCH,{fallback_target()}")], True
+        return [dim(f"规则      补了 {_rule_names()} + MATCH,{SKELETON_MATCH}")], True
 
     if match is not None and items[-1] in _our_match_items():
         mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
@@ -762,14 +672,8 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
 
     mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
     if items[:-1] == mine and items[-1] in _our_match_items():
-        if items[-1] != f"MATCH,{fallback_target()}":  # 文件跟工具记的偏好不一致：只提醒，不动
-            return [
-                warn(
-                    f"⚠ 规则      骨架的兜底是 {items[-1]}，工具记的偏好是 {fallback()}；"
-                    f"想改回一致：mihomo-cli config default {fallback()}"
-                )
-            ], False
-        return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 MATCH），没动")], False
+        # 兜底是两条里的哪一条都算「自家人」：老配置那条 MATCH,节点选择 是白名单模式，照样不动它
+        return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 {items[-1]}），没动")], False
 
     if len(items) == 1 and items[0].upper().startswith("MATCH"):
         note.append(
@@ -820,7 +724,7 @@ def _insert_missing_rules(
 
 def _skeleton_rule_items() -> list[str]:
     """本工具建骨架时会写出来的规则项（用来识别“已经是我们的骨架”）。"""
-    return [*_rule_items_of(SPLIT_RULES), f"MATCH,{fallback_target()}"]
+    return [*_rule_items_of(SPLIT_RULES), f"MATCH,{SKELETON_MATCH}"]
 
 
 def _rule_names() -> str:

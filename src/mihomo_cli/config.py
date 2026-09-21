@@ -34,7 +34,6 @@ from .core import (
     require_config,
     warn,
 )
-from .subs import GROUP_NAME, cmd_default_fallback, fallback_state
 
 
 class Key(NamedTuple):
@@ -47,7 +46,6 @@ class Key(NamedTuple):
 
 
 MODES = ("rule", "global", "direct")
-FALLBACKS = ("proxy", "direct")  # 兜底规则走哪（`config default`，见 subs.py 那段注释）
 LOG_LEVELS = ("silent", "error", "warning", "info", "debug")
 BOOLS = ("true", "false")
 
@@ -171,8 +169,6 @@ def cmd_config(args: argparse.Namespace) -> int:
     action = getattr(args, "config_action", None)
     if action is None:
         return _show()
-    if action == "default":  # 兜底规则走哪：它改的是 rules 里那条 MATCH，不在 KEYS 里
-        return cmd_default_fallback(args.value)
     return _set(action, args.value)
 
 
@@ -194,31 +190,10 @@ def _show() -> int:
         print("  " + pad(key, 10) + " " + "  ".join(x for x in (str(label), tail, mark) if x))
     if not live:
         print(dim("  内核没在跑，只显示 config.yaml 里的值（运行时值要问控制接口）"))
-    _show_fallback(cfg)
     print(dim("  改：mihomo-cli config mode rule|global|direct"))
     print(dim("      mihomo-cli config log-level silent|error|warning|info|debug"))
     print(dim("      mihomo-cli config allow-lan true|false"))
-    print(dim("      mihomo-cli config default proxy|direct   # 兜底规则走代理还是直连"))
     return 0
-
-
-def _show_fallback(cfg) -> None:
-    """第四项：兜底规则（`rules` 里那条 MATCH）走代理还是直连。
-
-    它不在 config.yaml 的顶层，所以没走 `KEYS` 那套；值有两个来源——文件里那条 MATCH
-    （当前真实生效的）和工具目录里记着的偏好（`reset` 后重建骨架时用的）。两个不一样就标出来。"""
-    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
-    pref, actual = fallback_state(lines)
-    now = {"proxy": GROUP_NAME, "direct": "DIRECT"}[pref]
-    if actual is None:
-        label = dim("没写兜底（没命中的会直连；补一条：config default proxy|direct）")
-    else:
-        label = f"MATCH,{actual}"
-    tail = ""
-    if actual is not None and actual != now and actual in (GROUP_NAME, "DIRECT"):
-        tail = warn(f"≠ 工具记的偏好（{pref}）：跑 mihomo-cli config default {pref} 改回一致")
-    print("  " + pad("default", 10) + " " + "  ".join(x for x in (str(label), tail) if x))
-    print(dim(f"  {'':10} 兜底走哪：proxy = 其余全走代理（白名单反选） / direct = 其余直连（黑名单）"))
 
 
 def _set(key: str, value: str) -> int:
