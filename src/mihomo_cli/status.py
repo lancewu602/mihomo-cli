@@ -27,7 +27,14 @@ from .kernel import current_node, mihomo_pid, probe
 from .logs import find_log_file
 from .service import service_status
 from .subs import provider_overview
-from .systemproxy import active_service, list_services, match_service, proxy_states
+from .systemproxy import (
+    active_service,
+    get_bypass,
+    list_services,
+    match_service,
+    plist_bypass_map,
+    proxy_states,
+)
 
 
 def _ago(secs: float) -> str:
@@ -192,6 +199,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     # 一次读回所有网卡的代理设置：走系统 plist（~ms），plist 里没有的网卡才问 networksetup。
     # 原来这里是"每张网卡 × 每种协议"各调一次 networksetup，7 张网卡就是 21 次、0.6s。
     states_map = proxy_states(services)
+    bypass_map = plist_bypass_map()  # 绕过列表也一次读完（status 只显示活跃那张，读全量更省事）
     opened = [
         name for name, kinds in states_map.items() if any(p["enabled"] for p in kinds.values())
     ]
@@ -210,6 +218,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             mark = ok("on ") if p["enabled"] else bad("off")
             target = f"{p['server']}:{p['port']}" if p["server"] else dim("未设置")
             line(kind.lower(), f"{mark}  {target}")
+
+        # 绕过列表只有这行能看到条数（明细在 mihomo-cli proxy show）：它决定哪些地址根本不发给内核，
+        # 内网访问出问题、或怀疑"我配的绕过被改了"时先看这里。走 plist（~1ms），缺的网卡才问 networksetup。
+        bypass = bypass_map[service] if service in bypass_map else get_bypass(service)
+        if bypass:
+            preview = "、".join(bypass[:3]) + ("…" if len(bypass) > 3 else "")
+            line("绕过列表", f"{len(bypass)} 条  " + dim(preview))
+        else:
+            line("绕过列表", dim("未设置"))
         # 只看选中的这张不够：别的网卡上可能还开着代理，看漏了会莫名其妙
         others = [n for n in opened if n != service]
         if others:
