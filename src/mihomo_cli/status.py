@@ -4,8 +4,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 
-from .core import (HOST, IS_MACOS, bad, can_check_listener, dim, note, ok, pad,
+from .core import (HOST, IS_MACOS, bad, can_check_listener, die, dim, note, ok, pad,
                   proxy_port, read_config, run, size_str, warn)
 from .kernel import (api, current_node, find_log_file, listener, mihomo_pid, probe,
                     service_status)
@@ -24,14 +25,20 @@ def _ago(secs: float) -> str:
     return f"{secs / 86400:.0f} 天前"
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+WATCH_DEFAULT = 2.0        # --watch 的默认刷新间隔（秒）
+
+
+def line(label: str, value: str) -> None:
+    """状态行。提到模块级是为了让 watch 也能画页脚（原来嵌在渲染函数里）。"""
+    print(f"  {pad(label, 12)} {value}")
+
+
+def render(args: argparse.Namespace) -> int:
+    """画一屏状态。--watch 复用这一份，别把同一套字段维护两遍。"""
     port = proxy_port()
     pid = mihomo_pid()
     found = listener(port)
     names = {n for n, _ in found}
-
-    def line(label: str, value: str) -> None:
-        print(f"  {pad(label, 12)} {value}")
 
     def info_block() -> None:
         """订阅 / 节点 / 日志：都是「看一眼」的信息，排在出口和连通性前面。"""
@@ -168,4 +175,40 @@ def cmd_status(args: argparse.Namespace) -> int:
         line("连通性", ok("✓ " + info) if good else bad("✗ " + info))
     return 0
 
+
+def watch(args: argparse.Namespace, interval: float) -> int:
+    """自己清屏重画：不 fork watch(1)，也不依赖 curses。
+
+    只给终端用——管道/重定向下 ANSI 转义只会变成一堆乱码，不如直接拒绝。
+    """
+    if not sys.stdout.isatty():
+        die("--watch 需要终端（输出被重定向或接了管道）\n"
+            "  只想看一次：mihomo-cli status")
+    try:
+        sys.stdout.write("\033[?25l")            # 藏光标，减少闪烁
+        while True:
+            t0 = time.perf_counter()
+            # 回左上角 + 擦到屏幕末尾：帧变短不留残影，也不毁滚动历史（别用 2J）
+            sys.stdout.write("\033[H\033[J")
+            render(args)
+            # 一帧本身不便宜（brew services list 就要 1.6s），把耗时摆出来，
+            # 免得用户以为 --interval 就是实际刷新周期
+            cost = time.perf_counter() - t0
+            print(dim(f"  {time.strftime('%H:%M:%S')}  上一帧 {cost:.1f}s"
+                      f"  每 {interval:g}s 刷新  Ctrl-C 退出"), flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0                                 # Ctrl-C 就是这个模式的正常退法，不报 130
+    finally:
+        sys.stdout.write("\033[?25h\n")          # 光标还回去，否则终端会一直"看不见光标"
+        sys.stdout.flush()
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    interval = getattr(args, "interval", None)
+    if not getattr(args, "watch", False):
+        return render(args)
+    if interval is not None and interval <= 0:
+        die("--interval 得是正数")
+    return watch(args, interval or WATCH_DEFAULT)
 
