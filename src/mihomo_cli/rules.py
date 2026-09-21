@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
 from .core import (
@@ -98,42 +97,6 @@ def _entries(path: Path) -> int | None:
     return n
 
 
-def _provider_paths(lines: list[str]) -> dict[str, str]:
-    """`rule-providers` 里每个 provider 的 `path:` 值（手写的那种能看出来）。
-
-    只给 `rule` 看现状用：工具接的是 `./.mihomo-cli/xxx.txt`（符号链接），用户自己手写一份
-    指向别处（比如文件直接放在内核目录里）就该说清楚，别含含糊糊报个「已接」。
-
-    块状（名字一行、字段缩进一行）和流式（`my-direct: {type: file, …, path: ./direct.txt}`）
-    两种写法都认：按缩进量把「provider 名」和「字段」分开。"""
-    span = _section_span(lines, "rule-providers")
-    if span is None:
-        return {}
-    rows = [
-        ln
-        for ln in lines[span[0] + 1 : span[1]]
-        if ln.strip() and not ln.lstrip().startswith("#")
-    ]
-    if not rows:
-        return {}
-    base = min(len(ln) - len(ln.lstrip()) for ln in rows)
-    out: dict[str, str] = {}
-    name: str | None = None
-    for ln in rows:
-        m = re.match(r"^\s*([A-Za-z0-9_.-]+):\s*(.*?)\s*$", ln)
-        if m is None:
-            continue
-        key, rest = m.group(1), m.group(2)
-        if len(ln) - len(ln.lstrip()) == base:  # provider 名那一行
-            name = key
-            out.setdefault(name, "")
-            if rest.startswith("{") and (pm := re.search(r"path:\s*([^,}]+)", rest)):
-                out[name] = pm.group(1).strip().strip("\"'")
-        elif name and key == "path":
-            out[name] = rest.strip("\"'")
-    return out
-
-
 def _wired(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
     """config.yaml 里三个 provider / 三条 RULE-SET 各缺什么，以及哪几个接不了。
 
@@ -177,7 +140,6 @@ def _show() -> int:
     cfg = require_config()
     lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
     miss_prov, miss_rule, blocked = _wired(lines)
-    paths = _provider_paths(lines)
     print(dim(f"mihomo  /  {cfg}"))
     for name, file, _target in LOCAL_RULE_SETS:
         path = _rules_dir() / file
@@ -192,15 +154,8 @@ def _show() -> int:
         }[state]
         if name in blocked:
             wired = warn(f"没接（没有 {GROUP_NAME} 组）")
-        elif name in miss_prov or name in miss_rule:
-            wired = dim("没接")
         else:
-            wired = ok("已接")
-        # 手写的 path（不是工具那个符号链接）说清楚：那种情况链接本来就不需要
-        expected = f"./{KERNEL_RULE_DIR}/{file}"
-        if (got := paths.get(name)) and got != expected:
-            wired = ok(f"已接（path: {got}）")
-            link = dim("—（不是工具那份）")
+            wired = dim("没接") if name in miss_prov or name in miss_rule else ok("已接")
         print(f"  {pad(name, 10)} {count:<10} {wired:<6} {link}")
         print(dim(f"  {'':10} {path}"))
     print(dim(f"  文件里的域名改完就生效（内核盯着它），不用重启；指向 {RULE_HINT}"))
