@@ -83,6 +83,13 @@ config allow-lan <值>    允许其他设备经代理端口上网：true / false
                          落盘保证重启后还是这个值，PATCH 保证现在这一刻就生效；
                          allow-lan 会把代理端口从 127.0.0.1 改成绑所有网卡（实测当场就重新绑上），
                          等于把代理给整个局域网，只在自己信得过的网络里开
+config default <值>      兜底规则走哪（rules 里那条 MATCH）：
+                         proxy  = MATCH,节点选择（白名单反选：除内网/广告/国内，其余全走代理）
+                         direct = MATCH,DIRECT（黑名单：只有 rules 里列出来的走代理）
+                         **只改那一行**（兜底指向自定义组时不动、只提醒）；因为 rules 是内核
+                         启动时读一次的、没有热重载，所以要重启内核（不像上面三项能 PATCH）；
+                         这个选择会记进 `~/.config/mihomo-cli/default`——reset 把配置清成
+                         最小骨架后，sub set 重建骨架时按它把兜底写回去
 
 nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
 status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
@@ -112,8 +119,8 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 ## 数据与配置
 
 - 工具数据在 `~/.config/mihomo-cli/`：`state.json`（macOS 系统代理的原状态）、`nic`（`mihomo-cli nic`
-  固定的那张网卡，单独一个文件）、`backups/`（`sub set` 写配置前的备份，留最近 5 份；
-  `reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
+  固定的那张网卡，单独一个文件）、`default`（兜底规则走代理还是直连，`mihomo-cli config default` 写）、
+  `backups/`（写配置前的备份，留最近 5 份；`reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
   也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，唯一的写操作是 `sub set`：
   只动 `proxy-providers` 里的 `airport`、引用它的组，以及**缺失时才补**的那几条（分流规则、

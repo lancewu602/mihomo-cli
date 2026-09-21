@@ -47,7 +47,7 @@ import argparse
 import os
 import sys
 
-from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
+from .config import BOOLS, FALLBACKS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
@@ -215,6 +215,14 @@ def _main(argv: list[str] | None = None) -> int:
                 ),
             )
             ca.add_argument("value", choices=BOOLS, metavar="{" + ",".join(BOOLS) + "}")
+            cd = csub.add_parser(
+                "default",
+                help=(
+                    "兜底规则走哪：proxy = 其余全走代理（MATCH,节点选择）/ "
+                    "direct = 其余直连（MATCH,DIRECT）；rules 要重启内核才生效"
+                ),
+            )
+            cd.add_argument("value", choices=(FALLBACKS), metavar="{proxy,direct}")
         if fn is cmd_reset:
             p.add_argument(
                 "--hard",

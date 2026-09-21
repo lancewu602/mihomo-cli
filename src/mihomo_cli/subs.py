@@ -29,6 +29,7 @@ from .core import (
     FALLBACK_PORT,
     RESTART_HINT,
     TEST_URL,
+    TOOL_DIR,
     api,
     api_raw,
     bad,
@@ -599,6 +600,129 @@ def _our_provider(lines: list[str], strict: bool = True) -> dict | None:
     return next((p for p in _providers(lines, strict=strict) if p["name"] == SUB_NAME), None)
 
 
+# ─────────────────── 兜底规则走代理还是直连 ───────────────────
+#
+# 骨架最后那条 MATCH 决定整份配置的模式：
+#   MATCH,节点选择 → 白名单反选：除内网/广告/国内，其余全走代理
+#   MATCH,DIRECT   → 黑名单：只有 rules 里列出来的走代理，其余直连
+#
+# 这一项跟 `config` 那三项不同：它不在 config.yaml 的顶层，而是 `rules:` 里那条 MATCH；
+# 而且 rules 是**启动时读一次**的，改完必须重启内核（没有 PATCH 热改）。
+#
+# 为什么要记在工具目录：`reset` 会把 config.yaml 清成最小骨架、`sub set` 再重建骨架——
+# 重建时得知道用户的兜底选择。不记的话就是「我明明是黑名单模式，reset 一下变回白名单了」
+# （2026-09-21 实测踩到：黑名单那几行被 reset 吃掉，sub set 又把 MATCH,节点选择 写回去）。
+FALLBACK_FILE = TOOL_DIR / "default"
+FALLBACK_TARGETS = {"proxy": GROUP_NAME, "direct": "DIRECT"}
+
+
+def fallback() -> str:
+    """兜底走哪：`proxy` / `direct`。没记过就 `proxy`（本工具一贯的默认）。"""
+    try:
+        v = FALLBACK_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "proxy"
+    return v if v in FALLBACK_TARGETS else "proxy"
+
+
+def fallback_target() -> str:
+    """兜底规则的目标：`节点选择` 或 `DIRECT`。"""
+    return FALLBACK_TARGETS[fallback()]
+
+
+def _our_match_items() -> set[str]:
+    """本工具写过的兜底 MATCH 行（当前偏好 + 历史的 `MATCH,节点选择`）。
+
+    `MATCH,DIRECT` 要多一道「偏好确实是 direct」的门——不然用户自己手写的黑名单兜底会被
+    当成我们的骨架（那种配置挺常见）。"""
+    mine = {f"MATCH,{GROUP_NAME}"}
+    if fallback() == "direct":
+        mine.add("MATCH,DIRECT")
+    return mine
+
+
+def _remember_fallback(which: str) -> None:
+    try:
+        FALLBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FALLBACK_FILE.write_text(which + "\n", encoding="utf-8")
+    except OSError as e:
+        die(f"写 {FALLBACK_FILE} 失败：{e}")
+
+
+def fallback_state(lines: list[str]) -> tuple[str, str | None]:
+    """(工具记的偏好, 文件里兜底 MATCH 的目标或 None)。给 `config` 看现状用。"""
+    match = _match_rule(lines)
+    return fallback(), (match[1] if match else None)
+
+
+def _tail_comment(line: str) -> str:
+    """行尾注释（含前面那几个空格，原样留着）。"""
+    m = re.search(r"[ \t]#", line)
+    return line[m.start() :].rstrip("\n") if m else ""
+
+
+def _rewrite_fallback(lines: list[str], target: str) -> tuple[list[str], bool]:
+    """把兜底 MATCH 换成 target。返回 (给用户看的说明, 有没有改过 lines)。
+
+    只动三种现状：没有 MATCH（补一条）、兜底是 `节点选择`、兜底是 `DIRECT`。
+    兜底指向别的组（用户自己接的目标）时**不动**，只提示——那是他的目标，不是我们的。"""
+    match = _match_rule(lines)
+    if match is None:
+        span = _section_span(lines, "rules")
+        if span is None:
+            _new_section(lines, "rules:", [f"  - MATCH,{target}\n"])
+            return [dim(f"规则      原来没有兜底，补了 MATCH,{target}")], True
+        _reject_flow(lines, span[0], "rules")
+        rows = _rule_line_indices(lines)
+        at = rows[-1] + 1 if rows else span[1]  # 兜底必须在最后
+        row = lines[rows[0]] if rows else "  - x\n"
+        indent = row[: len(row) - len(row.lstrip())]
+        lines[at:at] = [f"{indent}- MATCH,{target}\n"]
+        return [dim(f"规则      原来没有兜底，补了 MATCH,{target}（放最后）")], True
+
+    at, cur = match
+    if cur == target:
+        return [dim(f"规则      兜底已经是 MATCH,{target}，没动")], False
+    if cur not in FALLBACK_TARGETS.values():
+        return [
+            warn(
+                f"⚠ 规则      兜底是 MATCH,{cur}（不是本工具写的），没动它；"
+                f"想换成 MATCH,{target} 就自己改那一行"
+            )
+        ], False
+    old = lines[at]
+    indent = old[: len(old) - len(old.lstrip())]
+    lines[at] = f"{indent}- MATCH,{target}{_tail_comment(old)}\n"
+    return [dim(f"规则      兜底 MATCH,{cur} → MATCH,{target}")], True
+
+
+def cmd_default_fallback(which: str) -> int:
+    """`config default proxy|direct`：切换兜底规则走代理还是直连。
+
+    rules 不是热配置（内核启动时读一次），所以这一步**必须重启内核**才生效——
+    跟 `config mode` 那种 PATCH 当场生效的不一样。"""
+    cfg = require_config()
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    target = FALLBACK_TARGETS[which]
+    if which == "proxy" and GROUP_NAME not in group_names(lines):
+        die(
+            f"配置里没有 {GROUP_NAME} 这个组，兜底指不过去（`mihomo -t` 会报 proxy not found）。\n"
+            f"  先建骨架：mihomo-cli sub set <订阅链接>"
+        )
+    notes, changed = _rewrite_fallback(lines, target)
+    for note in notes:
+        print(note)
+    if not changed:
+        _remember_fallback(which)  # 现状就是它，也把偏好记上（下次 reset 重建时用）
+        return 0
+    if not commit_config(cfg, lines, f"兜底规则：MATCH,{target}"):
+        return 1
+    _remember_fallback(which)
+    print(dim(f"  记进 {FALLBACK_FILE}：reset 之后 sub set 重建骨架会按它写回兜底"))
+    print(dim("  rules 是内核启动时读的、没有热重载 → 顺手重启一下内核"))
+    return _after_write(note="下次启动内核时生效")
+
+
 def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
     """保证 rules 里有「分流规则 + 兜底 MATCH」。返回 (给用户看的说明, 有没有真改过 lines)。
 
@@ -620,15 +744,15 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
     note: list[str] = []
 
     if items == []:  # 没有规则（或 rules 里全是注释）：把整套骨架补上
-        block = [*_split_rule_lines(), f"  - MATCH,{GROUP_NAME}\n"]
+        block = [*_split_rule_lines(), f"  - MATCH,{fallback_target()}\n"]
         if (rspan := _section_span(lines, "rules")) is not None:
             _reject_flow(lines, rspan[0], "rules")
             lines[rspan[1] : rspan[1]] = block
         else:
             _new_section(lines, "rules:", block)
-        return [dim(f"规则      补了 {_rule_names()} + MATCH,{GROUP_NAME}")], True
+        return [dim(f"规则      补了 {_rule_names()} + MATCH,{fallback_target()}")], True
 
-    if match is not None and items[-1] == f"MATCH,{GROUP_NAME}":
+    if match is not None and items[-1] in _our_match_items():
         mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
         have = items[:-1]
         if have != mine and any(have == _rule_items_of(r) for r in LEGACY_SPLIT_RULES):
@@ -636,7 +760,15 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
             where = "插在自己那几条规则前面" if have else "插在它前面"
             return [dim(f"规则      补了 {'、'.join(add)}（老骨架，{where}）")], True
 
-    if items == _skeleton_rule_items():
+    mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
+    if items[:-1] == mine and items[-1] in _our_match_items():
+        if items[-1] != f"MATCH,{fallback_target()}":  # 文件跟工具记的偏好不一致：只提醒，不动
+            return [
+                warn(
+                    f"⚠ 规则      骨架的兜底是 {items[-1]}，工具记的偏好是 {fallback()}；"
+                    f"想改回一致：mihomo-cli config default {fallback()}"
+                )
+            ], False
         return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 MATCH），没动")], False
 
     if len(items) == 1 and items[0].upper().startswith("MATCH"):
@@ -688,11 +820,31 @@ def _insert_missing_rules(
 
 def _skeleton_rule_items() -> list[str]:
     """本工具建骨架时会写出来的规则项（用来识别“已经是我们的骨架”）。"""
-    return [*_rule_items_of(SPLIT_RULES), f"MATCH,{GROUP_NAME}"]
+    return [*_rule_items_of(SPLIT_RULES), f"MATCH,{fallback_target()}"]
 
 
 def _rule_names() -> str:
     return "、".join(f"{name},{target}" for name, target in SPLIT_RULES)
+
+
+def _rule_line_indices(lines: list[str]) -> list[int]:
+    """rules 节里每条规则所在的行号（顺序即文件顺序）。"""
+    span = _section_span(lines, "rules")
+    if span is None:
+        return []
+    return [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
+
+
+def group_names(lines: list[str]) -> set[str]:
+    """`proxy-groups` 里所有组的名字。给「规则的目标组在不在」这类检查用。"""
+    span = _section_span(lines, "proxy-groups")
+    if span is None:
+        return set()
+    out: set[str] = set()
+    for line in lines[span[0] + 1 : span[1]]:
+        if m := re.match(r"^\s*-\s*name:\s*(.+?)\s*$", line):
+            out.add(_scalar(m.group(1)))
+    return out
 
 
 def _rule_items(lines: list[str]) -> list[str]:
