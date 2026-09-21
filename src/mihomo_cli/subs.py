@@ -99,23 +99,6 @@ LEGACY_SPLIT_RULES = [
     [("GEOSITE,cn", "DIRECT")],  # v2：只有国内直连那一条
 ]
 
-# 本地规则集（`mihomo-cli rule`）：三个文件在工具目录里，内核目录里只放指向它们的符号链接。
-# 名字带 `my-` 前缀，跟用户的远程规则集区分开；三条规则的顺序跟着元组顺序来，
-# `my-direct` 必须在最前面（它是白名单，要压过后面的 ads / cn）。
-LOCAL_RULE_SETS = (
-    ("my-direct", "direct.txt", "DIRECT"),  # 自定义直连（也用来放行被广告表误拦的域名）
-    ("my-proxy", "proxy.txt", GROUP_NAME),  # 自定义代理（比 `GEOSITE,cn` 优先）
-    ("my-reject", "reject.txt", "REJECT"),  # 自定义拦截
-)
-# 内核目录（`-d`）里放符号链接的子目录。**为什么要绕这一圈**：内核只允许 rule-provider 的
-# `path` 落在 `-d` 目录里，实测报错是
-# `path is not subpath of home directory or SAFE_PATHS: … allowed paths: [/opt/homebrew/etc/mihomo]`
-# （`mihomo -t` 就会拦下来）。而用户要的文件在工具目录（~/.config/mihomo-cli/rules）。
-# 符号链接实测两头都过得去：`mihomo -t` 通过、运行时真读到了、改真身文件还能热重载
-# （不用重启内核）。备选方案都不如它：把文件直接写在内核目录里 = 两个地方各一份；
-# 靠 `SAFE_PATHS` 环境变量 = 得改 brew services 生成的 plist，`brew services start` 还会覆盖掉。
-KERNEL_RULE_DIR = ".mihomo-cli"
-
 # 建骨架时要补的全局标量（顶层键 + 值）。顺序就是写进配置里的顺序，大致跟手册 general 那页
 # 的排法对齐：运行模式 / 日志级别 / IPv6 / 控制接口 / 统一延迟 / TCP 并发 / geodata。
 #
@@ -633,15 +616,6 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
     「你自己写的、没动」也是不改 lines 的。
     """
     items = _rule_items(lines)
-    rows = _rule_line_indices(lines)
-    lead = set(local_rule_lines())
-    k = 0
-    while k < len(items) and items[k] in lead:  # 前面是 `mihomo-cli rule` 接进来的那几条
-        k += 1
-    if k:
-        # 本地规则集不归骨架管，但要先拿掉再认骨架，否则一接管规则集，骨架以后就再也升不了级
-        # （会被当成「你自己写的 N 条规则」）。
-        items, rows = items[k:], rows[k:]
     match = _match_rule(lines)
     note: list[str] = []
 
@@ -658,7 +632,7 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
         mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
         have = items[:-1]
         if have != mine and any(have == _rule_items_of(r) for r in LEGACY_SPLIT_RULES):
-            add = _insert_missing_rules(lines, have, mine, rows[:-1], rows[-1])
+            add = _insert_missing_rules(lines, have, mine, match[0])
             where = "插在自己那几条规则前面" if have else "插在它前面"
             return [dim(f"规则      补了 {'、'.join(add)}（老骨架，{where}）")], True
 
@@ -681,163 +655,23 @@ def _split_rule_lines() -> list[str]:
     return [f"  - {name},{target}\n" for name, target in SPLIT_RULES]
 
 
-def local_rule_lines() -> list[str]:
-    """三条本地规则集的规则项（顺序就是插进 rules 的顺序）。"""
-    return [f"RULE-SET,{name},{target}" for name, _file, target in LOCAL_RULE_SETS]
-
-
-def group_names(lines: list[str]) -> set[str]:
-    """`proxy-groups` 里所有组的名字。给“规则的目标组在不在”这类检查用。"""
-    span = _section_span(lines, "proxy-groups")
-    if span is None:
-        return set()
-    out: set[str] = set()
-    for line in lines[span[0] + 1 : span[1]]:
-        if m := re.match(r"^\s*-\s*name:\s*(.+?)\s*$", line):
-            out.add(_scalar(m.group(1)))
-    return out
-
-
-def _local_ready(lines: list[str]) -> tuple[list[tuple[str, str, str]], list[str]]:
-    """哪几个本地规则集现在能接、哪几个接不了（目标组还不存在）。
-
-    `my-proxy` 指向 `节点选择`——而 `reset` 之后、或者用户自己写了别的组名时，这个组可能
-    压根不存在，写进去 `mihomo -t` 会报 `proxy [节点选择] not found`（实测踩过，虽然会被
-    校验挡下来、不会真写坏，但报错方式对用户不友好）。所以先看一眼，接不了的就明说原因。
-    """
-    groups = group_names(lines)
-    ready, blocked = [], []
-    for name, file, target in LOCAL_RULE_SETS:
-        if target in ("DIRECT", "REJECT") or target in groups:
-            ready.append((name, file, target))
-        else:
-            blocked.append(name)
-    return ready, blocked
-
-
-def _local_provider_lines(
-    indent: str, only: list[str] | None = None, sets: list[tuple[str, str, str]] | None = None
-) -> list[str]:
-    """rule-providers 里那几个本地规则集（字段缩进跟着项走）。"""
-    f = indent + "  "
-    out: list[str] = []
-    for name, file, _target in sets if sets is not None else LOCAL_RULE_SETS:
-        if only is not None and name not in only:
-            continue
-        out += [
-            f"{indent}{name}:\n",
-            f"{f}type: file\n",
-            f"{f}behavior: domain\n",
-            # text 格式：文件里一行一个域名，不用写 `payload:` 外壳（README 里那三个 txt 就是
-            # 这个形状）。`mrs` 体积最小但要先用 `mihomo convert-ruleset` 转，手工编辑不方便。
-            f"{f}format: text\n",
-            f"{f}path: ./{KERNEL_RULE_DIR}/{file}\n",
-        ]
-    return out
-
-
-def ensure_local_rule_sets(lines: list[str]) -> tuple[list[str], bool]:
-    """把三个本地规则集接进 config.yaml：`rule-providers` 节 + rules 最前面那三条。
-
-    返回 (给用户看的说明, 有没有真改过 lines)，跟 `_ensure_globals()` 一个形状。
-
-    **规则为什么插在最前面**：顺序就是匹配顺序，先命中先赢。`my-direct` 是白名单（要压过
-    后面的 `GEOSITE,category-ads-all,REJECT` 和 `GEOSITE,cn,DIRECT`）、`my-proxy` 要压过
-    `GEOSITE,cn,DIRECT`、`my-reject` 要压过块尾的 `MATCH`——都只有排在最前面对。
-
-    跟 `_ensure_rules()` 一样只补不抢：已有的 provider（同名）一个字节不碰、已有的 RULE-SET
-    行不重复插。
-    """
-    notes: list[str] = []
-    added: list[str] = []
-    changed = False
-    ready, blocked = _local_ready(lines)
-    lead = [f"RULE-SET,{name},{target}" for name, _f, target in ready]
-    if blocked:
-        notes.append(
-            warn(
-                f"⚠ 本地规则集  {'、'.join(blocked)} 先没接：配置里还没有 "
-                f"{GROUP_NAME} 这个组（先 `mihomo-cli sub set <链接>` 建骨架，再 `rule init`）"
-            )
-        )
-
-    if (span := _section_span(lines, "rule-providers")) is None:
-        if ready:
-            _new_section(
-                lines, "rule-providers:", _local_provider_lines("  ", sets=ready), before=("rules",)
-            )
-            added.append(f"rule-providers（{'、'.join(n for n, _f, _t in ready)}）")
-            changed = True
-    elif _flow_head(lines, span[0]):
-        notes.append(
-            warn(
-                f"⚠ 本地规则集  rule-providers 是流式写法（{{…}}），没动它；"
-                f"自己补上 {'、'.join(n for n, _f, _t in ready)} 这几个"
-            )
-        )
-    else:
-        have = _block_keys(lines, span[0], span[1], 0)
-        miss = [n for n, _f, _t in ready if n not in have]
-        if miss:
-            at = _content_end(lines, span[0], span[1])
-            indent = _field_indent(lines, span[0], at, 2)
-            lines[at:at] = _local_provider_lines(" " * indent, only=miss, sets=ready)
-            added.append(f"rule-providers（补了 {'、'.join(miss)}）")
-            changed = True
-
-    if (rspan := _section_span(lines, "rules")) is None:
-        block = [*(f"  - {item}\n" for item in lead)]
-        # 兜底 MATCH 只在目标组真存在时才写：不然 `mihomo -t` 会报
-        # `rules[N] [MATCH,节点选择] error: proxy [节点选择] not found`（实测踩过）。
-        if GROUP_NAME in group_names(lines):
-            block.append(f"  - MATCH,{GROUP_NAME}\n")
-        _new_section(lines, "rules:", block)
-        added.append("rules（本地规则集规则 + 兜底 MATCH）")
-        changed = True
-    else:
-        _reject_flow(lines, rspan[0], "rules")
-        items = _rule_items(lines)
-        miss = [item for item in lead if item not in items]
-        if miss:
-            rows = _rule_line_indices(lines)
-            at = rows[0] if rows else rspan[1]  # 插在最前面（没有规则就插在节尾）
-            indent = _rule_indent(lines, rspan, rows, at)
-            lines[at:at] = [f"{indent}- {item}\n" for item in miss]
-            added.append(f"rules（{'、'.join(miss)}，插在最前面）")
-            changed = True
-
-    out = [dim(f"本地规则集  补了 {'、'.join(added)}（已有的一个字节不碰）")] if added else []
-    return [*out, *notes], changed
-
-
-def _rule_indent(lines: list[str], span: tuple[int, int], rows: list[int], at: int) -> str:
-    """rules 里规则行的缩进：照抄第一条已有规则；一条都没有就按常见的两空格。"""
-    row = lines[rows[0]] if rows else "  - x\n"
-    return row[: len(row) - len(row.lstrip())] if rows else "  "
-def _rule_line_indices(lines: list[str]) -> list[int]:
-    """rules 节里每条规则所在的行号（顺序即文件顺序）。"""
-    span = _section_span(lines, "rules")
-    if span is None:
-        return []
-    return [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
-
-
 def _rule_items_of(rules: list[tuple[str, str]]) -> list[str]:
     """把 (规则名, 目标) 列表转成 rules 里的项文本（识别骨架用）。"""
     return [f"{name},{target}" for name, target in rules]
 
 
 def _insert_missing_rules(
-    lines: list[str], have: list[str], mine: list[str], rows: list[int], match_line: int
+    lines: list[str], have: list[str], mine: list[str], match_line: int
 ) -> list[str]:
     """把 mine 里 `have` 没有的那几条插到**正确位置**（顺序就是匹配顺序）。
 
     插在哪：插在「已有的、且在 mine 里排在它后面的第一条」前面；后面没有已有的了，
     就插在兜底 MATCH 前面。从后往前插，行号不会被前面的插入带偏。
 
-    `rows` 是 `have` 里每一条各自所在的行号（一一对应）——调用方已经把本地规则集那三条
-    刨掉了，所以不能在这里重新扫一遍 rules。缩进照抄被插入位置那一行：混缩进的话 YAML
-    序列会直接解析失败。"""
+    缩进照抄被插入位置那一行——混缩进的话 YAML 序列会直接解析失败。"""
+    span = _section_span(lines, "rules")
+    assert span is not None  # 调用方已经确认 rules 节存在
+    rows = [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
     plan: dict[int, list[str]] = {}
     for item in mine:
         if item in have:
