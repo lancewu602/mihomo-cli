@@ -94,6 +94,22 @@ STATE_FILE = TOOL_DIR / "state.json"  # macOS 系统代理的原状态，stop �
 TEST_URL = os.environ.get("MIHOMO_TEST_URL", "https://www.gstatic.com/generate_204")
 PROBE_TIMEOUT = 4.0  # 探测超时（秒）
 
+# ─────────────────────────── 环境探测 ───────────────────────────
+
+SERVICE_NAME = "mihomo"  # brew services / systemd 里那个服务（unit）名
+
+
+def service_manager() -> tuple[str, str] | None:
+    """本机拿谁管内核服务：返回 ("brew"|"systemd", 给人看的名字)。找不到给 None。"""
+    if IS_MACOS and shutil.which("brew"):
+        return "brew", "brew services"
+    if shutil.which("systemctl") and Path("/run/systemd/system").is_dir():
+        return "systemd", "systemd"
+    if shutil.which("brew"):
+        return "brew", "brew services"
+    return None
+
+
 # ─────────────────────────── 输出小工具 ───────────────────────────
 
 _TTY = sys.stdout.isatty()

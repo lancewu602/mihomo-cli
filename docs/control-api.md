@@ -22,30 +22,30 @@
 
 安全上两条硬要求：**绑 `127.0.0.1`**（这接口等于内核的 root，绝不能对外），以及配 `secret`
 （之后每个请求都要带 `Authorization: Bearer <secret>`）。这个工具会自动带 token
-（`src/mihomo_cli/core.py:226` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
+（`src/mihomo_cli/core.py:242` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
 
 ## 本项目用了哪些端点
 
 出口只有两个封装：
 
-- `src/mihomo_cli/core.py:226` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
+- `src/mihomo_cli/core.py:242` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
   必须保留状态码：测速失败内核回 `400` 加一句 message，跟"内核没起来"（`0`）不是一回事。
-- `src/mihomo_cli/core.py:253` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
+- `src/mihomo_cli/core.py:269` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
   降级约定：status 在内核没起来时不崩，只显示"读不到"。
 
 | 代码位置 | 调用 | 干什么 |
 |---|---|---|
-| `src/mihomo_cli/core.py:326` `reload_config()` | `PUT /configs?force=true` | rules / geodata / sub 改完配置后热重载 |
-| `src/mihomo_cli/core.py:355` `controller_put()` | 任意 PUT | 写接口的统一封装（拿状态码，不解析 body） |
-| `src/mihomo_cli/status.py:145` | `GET /version` | 判断控制接口可用 |
-| `src/mihomo_cli/kernel.py:61` / `:83` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
-| `src/mihomo_cli/kernel.py:99` / `:109` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
+| `src/mihomo_cli/core.py:342` `reload_config()` | `PUT /configs?force=true` | rules / geodata / sub 改完配置后热重载 |
+| `src/mihomo_cli/core.py:371` `controller_put()` | 任意 PUT | 写接口的统一封装（拿状态码，不解析 body） |
+| `src/mihomo_cli/status.py:149` | `GET /version` | 判断控制接口可用 |
+| `src/mihomo_cli/kernel.py:48` / `:70` | `GET /providers/proxies[/{名}]` | 订阅总览 / 单个订阅详情 |
+| `src/mihomo_cli/kernel.py:86` / `:96` | `GET /proxies[/{名}]` | 当前出口链路、组的选项 |
 | `src/mihomo_cli/groups.py:30` | `GET /proxies` | 列策略组 |
-| `src/mihomo_cli/groups.py:152` | `PUT /proxies/{名}` | `group <组> <编号>` 切节点 |
+| `src/mihomo_cli/groups.py:153` | `PUT /proxies/{名}` | `group <组> <编号>` 切节点 |
 | `src/mihomo_cli/groups.py:107` / `:173` | `GET /proxies/{名}/delay` | 逐个节点测速 |
 | `src/mihomo_cli/groups.py:91` | `GET {组}/healthcheck` | 订阅节点整批交给内核测 |
 | `src/mihomo_cli/subs.py:667` | `PUT /providers/proxies/{名}` | `sub update`：让内核立刻重拉订阅 |
-| `src/mihomo_cli/subs.py:1044` / `:1089` | `GET /version`、`GET /providers/proxies` | 判断内核在不在跑 |
+| `src/mihomo_cli/subs.py:1044` / `:1213` | `GET /version`、`GET /providers/proxies` | 判断内核在不在跑 |
 
 ## 踩过的点
 

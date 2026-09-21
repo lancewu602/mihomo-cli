@@ -40,7 +40,7 @@ from .compose import cmd_kernel, cmd_proxy, cmd_restart, cmd_start, cmd_stop
 from .core import MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .geodata import FILE_NAMES, MIRRORS, cmd_geodata
 from .groups import cmd_group
-from .kernel import cmd_logs
+from .logs import cmd_logs
 from .nics import cmd_nics
 from .rules import cmd_rules
 from .status import cmd_status

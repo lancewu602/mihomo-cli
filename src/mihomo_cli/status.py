@@ -9,9 +9,11 @@ import sys
 from .core import (
     HOST,
     IS_MACOS,
+    api,
     bad,
     can_check_listener,
     dim,
+    listener,
     note,
     ok,
     pad,
@@ -21,7 +23,9 @@ from .core import (
     size_str,
     warn,
 )
-from .kernel import api, current_node, find_log_file, listener, mihomo_pid, probe, service_status
+from .kernel import current_node, mihomo_pid, probe
+from .logs import find_log_file
+from .service import service_status
 from .subs import provider_overview
 from .systemproxy import KINDS, active_service, get_proxy, list_services, match_service
 

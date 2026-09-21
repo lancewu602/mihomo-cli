@@ -6,8 +6,8 @@
 两层都能单独动，也能一条命令一起做；各自的顺序不变式落在 `src/mihomo_cli/compose.py`。
 
 ```
-core → kernel → systemproxy ─┐
-                    └────────┴→ compose → cli
+core → kernel → service → logs ─┐
+                         └──────┴→ systemproxy → compose → cli
 ```
 
 | 层 | 命令 | 管什么 | 平台 |
@@ -37,7 +37,9 @@ core → kernel → systemproxy ─┐
 系统代理状态来做重启后的验证，于是出现"`systemproxy` 在模块级 import `kernel`，`kernel` 只能
 在函数里 import `systemproxy`"的循环——靠注释和函数内 import 绕过。拆分后：
 
-- `kernel.py`：**只**管内核（`kernel_start` / `restart_kernel` / `stop_kernel` 等原始操作）
+- `kernel.py`：**只**读内核（进程 / 端口 / 控制接口 / 出口链路 / `probe` 探测）
+- `service.py`：**只**管内核服务（`kernel_start` / `restart_kernel` / `stop_kernel` / `wait_kernel` …）
+- `logs.py`：内核日志（`find_log_file` / `truncate_log` / `cmd_logs`）
 - `systemproxy.py`：**只**管 networksetup（`proxy_on` / `teardown` / 读状态的小工具）
 - `compose.py`：需要两层的命令（`start` / `stop` / `restart` / `kernel` / `proxy`），
   以及那两条不变式的检查

@@ -3,7 +3,9 @@
 模块分工（依赖是单向的：上层可以 import 下层，下层不许回头 import 上层）：
 
     core         地基：常量、目录/可执行文件探测、跑外部命令、config.yaml 读写与备份校验
-    kernel       内核本体：进程 / 服务 / 端口 / 日志 / 连通性，以及控制接口的读封装
+    kernel       内核观测：进程 / 端口 / 控制接口读 / 出口链路 / 连通性探测
+    service      内核服务：brew services / systemd 的 start / stop / restart 与端口就绪等待
+    logs         内核日志：写到哪、多大、怎么清空
     systemproxy  系统代理：macOS networksetup 的开关、原状态保存与还原
     nics         网卡：macOS 列网络服务，Linux 列接口 / 路由 / 代理变量
     subs         订阅：proxy-providers 增删查改，以及各代理组里的 use:
@@ -14,7 +16,8 @@
     compose      跨两层的命令：start / stop / restart 与 kernel / proxy 两个显式层
     cli          命令行入口：argparse、子命令表、异常兜底
 
-依赖方向是单向的：core → kernel → systemproxy → compose → cli，没有循环 import。
+依赖方向是单向的：core → kernel → service → logs → systemproxy → compose → cli，没有循环 import。
+（service 要用 logs 的清空日志，logs 要用 service_manager 判断是不是 systemd——后者其实只是个环境探测，所以放进了 core，两边都从 core 拿，循环就没了。）
 compose 存在的理由：内核和系统代理各自单独动都有会出事的地方（先把代理指向死端口、
 或者代理还指着内核就把它停了），那两条顺序不变式就落在 compose 里，见 docs/lifecycle.md。
 

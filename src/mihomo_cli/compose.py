@@ -26,20 +26,15 @@ from .core import (
     can_check_listener,
     die,
     dim,
+    listener,
     note,
     ok,
     pad,
     proxy_port,
     warn,
 )
-from .kernel import (
-    kernel_start,
-    listener,
-    mihomo_pid,
-    restart_kernel,
-    service_status,
-    stop_kernel,
-)
+from .kernel import mihomo_pid
+from .service import kernel_start, restart_kernel, service_status, stop_kernel
 from .systemproxy import (
     KINDS,
     active_service,
