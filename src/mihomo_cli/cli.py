@@ -204,8 +204,11 @@ def _main(argv: list[str] | None = None) -> int:
             psub = p.add_subparsers(dest="proxy_action")
             # 网卡名放在动作后面（proxy on "Wi-Fi"）：动作才是这个命令的动词，
             # 而且动作的位置不能变——通用位置参数会排在子命令前面，读起来别扭
-            ps = psub.add_parser("show", help="看各网卡的系统代理现状（默认）")
-            ps.add_argument("name", nargs="?", metavar="网卡名", help="只看这张网卡（不写=列全部）")
+            ps = psub.add_parser("show", help="看系统代理现状（默认只看活跃那张）")
+            ps.add_argument("name", nargs="?", metavar="网卡名", help="只看这张网卡")
+            ps.add_argument(
+                "--all", dest="all_nics", action="store_true", help="列所有网卡（默认只看活跃那张）"
+            )
             po = psub.add_parser("on", help="开系统代理（要求内核已在监听）")
             po.add_argument("name", nargs="?", metavar="网卡名", help="默认用当前活跃那张")
             pf = psub.add_parser("off", help="关系统代理，并把原设置还原回去")

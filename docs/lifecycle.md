@@ -17,6 +17,8 @@ core → kernel → service → logs ─┐
 | 组合 | `start` = kernel start + proxy on；`stop` = proxy off + kernel stop；`restart` = kernel restart | —— | 同上 |
 
 不带动作时两个命令都是**只读**的：`kernel` 打内核那几项 + 系统代理的指针，`proxy` 等于 `proxy show`。
+`proxy show` 默认只看**当前活跃那张网卡**（跟 `status` 一个视角，看别的网卡用 `--all` 或直接传名字）
+——「有哪些网卡、哪张活跃」是 `nics` 的活，这一层只讲代理指向。
 
 ## 两条顺序不变式（为什么不能随便拆）
 

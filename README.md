@@ -29,6 +29,7 @@
 kernel start|stop|restart   内核层（跨平台）：只动内核服务，不碰系统代理
 kernel stop --force        系统代理还指着内核时也照停（那些网卡上的应用会断网）
 proxy on|off|show [网卡名]  系统代理层（**仅 macOS**；Linux 下这个命令不注册）
+                          show 默认只看活跃那张，--all 列全部
 start [网卡名]              = kernel start + proxy on（Linux 上只有内核那半）
 stop [网卡名]               = proxy off 然后 kernel stop（顺序不能反）
 
