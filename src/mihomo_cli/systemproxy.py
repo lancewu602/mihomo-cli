@@ -31,7 +31,18 @@ from .core import (
     run,
     warn,
 )
-from .kernel import probe
+from .kernel import current_node, probe
+
+# 开完系统代理的连通性探测：**不是一次定生死**。
+#
+# 刚起来的 url-test 组手里只有“上次选中的那个节点”（`store-selected: true` 从 cache.db 恢复的），
+# 而那个节点可能已经不通了；内核要自己把整组测一遍（本机实测 ~12 秒）才会切到最快的那个。
+# 第一次 `start` 正好撞进这个窗口时，探测会失败——用户看到的是
+# `SSL: UNEXPECTED_EOF_WHILE_READING` 这类上游节点把连接掉掉的错，于是系统代理被回滚，
+# 再 `start` 一次就好了（“偶尔发生”的那一类）。所以在这个窗口里多试几次再下结论：
+# 实测叶子节点第一次有延迟在 t≈2.8s，url-test 切到最快节点在 t≈12s。
+PROBE_WINDOW = 18.0  # 从第一次探测算起，最多等这么久（秒）
+PROBE_RETRY_WAIT = 3.0  # 两次探测之间等多久（给测速腾时间；探测自己最多要 4 秒）
 
 # 开代理时写入的绕过列表：这些地址根本不发给 mihomo。
 # 好处：内网请求少一跳，mihomo 重启那几秒里 NAS / 路由器也不会跟着断。
@@ -434,6 +445,44 @@ def open_nics(
     return [name for name, kinds in states.items() if any(p["enabled"] for p in kinds.values())]
 
 
+def probe_until_ok(port: int) -> tuple[bool, str, int]:
+    """穿代理探测连通性，**不行就等一会再试**，返回 (通没通, 最后一行的说明, 试了几次)。
+
+    为什么值得多试：冷启动时 url-test 组可能还抱着一个已经不通的旧节点（见上面常量里的实测
+    时间线）。只试一次的话，唯一的后果就是“系统代理被回滚 → 再跑一次 start 就好了”——用户
+    看到的是一个假故障。这里把窗口交给重试，坏节点的事让内核自己在那几秒里切完。
+
+    真正没节点可用时也不会无限等：`PROBE_WINDOW` 秒封顶，然后照样回滚。"""
+    deadline = time.monotonic() + PROBE_WINDOW
+    tried = 0
+    while True:
+        good, info = probe(port)
+        tried += 1
+        if good or time.monotonic() >= deadline:
+            return good, info, tried
+        if tried == 1:
+            print(
+                dim(
+                    f"    连通性 {bad('✗ ' + info)}"
+                    "；刚起来时组里还抱着上次选的那个节点，等内核自己测完再切"
+                )
+            )
+        else:
+            waited = PROBE_WINDOW - max(0.0, deadline - time.monotonic())
+            print(
+                dim(
+                    f"    连通性 {bad('✗ ' + info)}"
+                    f"（已等 {waited:.0f}s，最多 {PROBE_WINDOW:.0f}s；{PROBE_RETRY_WAIT:g} 秒后再试）"
+                )
+            )
+        # 等下去有意义的前提是“组里确实还有节点（哪怕是坏的、正在被测掉的那个）”。连出口链路都
+        # 取不到（没订阅 / 订阅没拉下来 / 组是空的）就是白等——那种情况早失败早报错。
+        if current_node() is None:
+            print(dim("    内核里取不到出口链路（节点还没拉下来？），不等了"))
+            return False, info, tried
+        time.sleep(PROBE_RETRY_WAIT)
+
+
 def proxy_on(service: str) -> int:
     """在指定网卡上开系统代理。**不负责拉内核**——内核必须已经在监听。
 
@@ -469,17 +518,21 @@ def proxy_on(service: str) -> int:
         if get_proxy(service, kind)["enabled"]:
             print(f"    {kind:<5} {ok('on')}   {HOST}:{port}")
 
-    good, info = probe(port)
+    good, info, tried = probe_until_ok(port)
+    again = dim(f"（第 {tried} 次才通）") if tried > 1 and good else ""
     if not good:
         # 开完代理真发一个请求验证；不通就回到原样，不把用户丢在断网状态里
-        print(f"    连通性 {bad('✗ ' + info)}")
+        print(
+            f"    连通性 {bad('✗ ' + info)}"
+            + (dim(f"（试了 {tried} 次，共等 {PROBE_WINDOW:.0f} 秒）") if tried > 1 else "")
+        )
         restored = teardown(service)
         print(warn("⚠ 探测没通，已回滚系统代理（内核未受影响）"))
         print(dim(f"    {restored}"))
         print(dim("    先 mihomo-cli status 看节点是否可用，换好节点再 mihomo-cli start"))
         return 1
 
-    print(f"    连通性 {ok('✓ ' + info)}")
+    print(f"    连通性 {ok('✓ ' + info)}" + again)
     return 0
 
 
