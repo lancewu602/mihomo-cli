@@ -15,6 +15,8 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     sub   set|update|show   订阅：只支持一个链接，节点由内核自己拉
     config [mode|log-level]  全局设置：看现状，或者改 mode / log-level（写 config.yaml + 内核当场生效）
+    rule  [init]      本地规则集：三个自定义域名文件（直连 / 代理 / 拦截）放在工具目录，
+                      改完当场生效；init 把文件、内核目录里的链接和 config.yaml 一并接好
     reset [--hard]    清空配置：config.yaml 清成最小骨架（顶部注释 + mixed-port）
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     status            内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性
@@ -23,7 +25,11 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
 订阅只做一件事：一个链接。`sub set <链接>` 把它写进 config.yaml 的 proxy-providers，节点由内核
 自己按 url 拉（本工具不下载、不解析节点）；`sub update` 让内核当场重拉。`reset` 反过来：把
 config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--hard 连备份一起删）。规则 / geodata /
-策略组不做：那是手工活，或者用 mihomo 自带的控制面板。
+策略组默认选中不做：那是手工活，或者用 mihomo 自带的控制面板。
+
+自定义分流分两层：偶尔几条就直接写 config.yaml 的 `rules:`（本工具不碰你写的规则）；
+一批域名就用 `rule` 那三个本地规则文件（放在 ~/.config/mihomo-cli/rules，改完当场生效），
+详见 docs/rules.md。
 
 全局设置只做两项：`config mode`（rule / global / direct）与 `config log-level`
 （silent / error / warning / info / debug）。这两个值域封闭、内核的 `PATCH /configs` 也支持，
@@ -38,7 +44,7 @@ config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--har
 内核配置目录自动探测 ~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo…（MIHOMO_DIR 可覆盖）。
 零第三方依赖，只用标准库；内核由 brew services / systemd 常驻，本工具不自己 fork 进程。
 
-改代码前先看 docs/：control-api.md（控制接口）、packaging.md（构建二进制与安装）。
+改代码前先看 docs/：control-api.md（控制接口）、rules.md（自定义分流）、packaging.md（构建二进制与安装）。
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
+from .rules import cmd_rule
 from .service import cmd_start, cmd_stop
 from .status import cmd_status
 from .subs import cmd_reset, cmd_sub
@@ -69,6 +76,10 @@ SUBCOMMANDS = {
     "config": (
         "全局设置：看现状，或者改 mode / log-level（写盘 + 内核当场生效）",
         cmd_config,
+    ),
+    "rule": (
+        "本地规则集：看现状，init 把三个本地规则文件接进 config.yaml",
+        cmd_rule,
     ),
     "status": ("查看当前状态（默认）", cmd_status),
 }
@@ -108,6 +119,8 @@ def _needs_kernel(args: argparse.Namespace) -> bool:
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL
     if args.action == "config":  # 看现状是纯读；只有两个 setter 写盘
         return getattr(args, "config_action", None) is not None
+    if args.action == "rule":  # 看现状是纯读；init 要写盘、要 mihomo -t
+        return getattr(args, "rule_action", None) is not None
     return True
 
 
@@ -215,6 +228,15 @@ def _main(argv: list[str] | None = None) -> int:
                 ),
             )
             ca.add_argument("value", choices=BOOLS, metavar="{" + ",".join(BOOLS) + "}")
+        if fn is cmd_rule:
+            rsub = p.add_subparsers(dest="rule_action")
+            rsub.add_parser(
+                "init",
+                help=(
+                    "建三个本地规则文件（~/.config/mihomo-cli/rules）+ 内核目录里的链接，"
+                    "并把它们接进 config.yaml（rules 最前面）"
+                ),
+            )
         if fn is cmd_reset:
             p.add_argument(
                 "--hard",

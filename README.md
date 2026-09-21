@@ -84,6 +84,14 @@ config allow-lan <值>    允许其他设备经代理端口上网：true / false
                          allow-lan 会把代理端口从 127.0.0.1 改成绑所有网卡（实测当场就重新绑上），
                          等于把代理给整个局域网，只在自己信得过的网络里开
 
+rule                     本地规则集：看现状（三个文件各几条、接进 config.yaml 了没、内核目录里的
+                         链接通不通）
+rule init                建三个自定义域名文件（~/.config/mihomo-cli/rules/：direct.txt 直连 /
+                         proxy.txt 代理 / reject.txt 拦截）+ 内核目录里的符号链接 + 写进 config.yaml
+                         （只加一节 rule-providers 和 rules 最前面那三条 RULE-SET，你自己的规则不碰）。
+                         **改文件就生效，不用重启**（内核盯着它，实测 4 秒内命中）；
+                         注意一行一个域名、**不要写行尾注释**（会把整行变成无效域名，静默失效）
+
 nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
 status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
 
@@ -94,12 +102,15 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 除了订阅那一块（`sub set`）和 `config` 那三项（mode / log-level / allow-lan），改 `config.yaml` 的东西
 （规则、geodata、策略组默认选中）都是手工活：本工具不碰它。
+自定义分流分两层：偶尔几条就直接往 `config.yaml` 的 `rules:` 里写（工具不会碰你写的规则）；
+一批域名就用 `mihomo-cli rule` 那三个本地规则文件（改完当场生效），详见 [docs/rules.md](docs/rules.md)。
 `group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板（`external-controller`）即可。
 
 ## 文档
 
 | 文档 | 什么时候看 |
 |---|---|
+| [docs/rules.md](docs/rules.md) | 自定义分流的三条路（写 `rules:` / 本地规则集 `mihomo-cli rule` / 提给上游）、规则顺序为什么关键、行尾注释那个坑、怎么查一条规则生效没 |
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
 | [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/三条规则（为何选 v2ray-rules-dat）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
@@ -113,7 +124,8 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 - 工具数据在 `~/.config/mihomo-cli/`：`state.json`（macOS 系统代理的原状态）、`nic`（`mihomo-cli nic`
   固定的那张网卡，单独一个文件）、`backups/`（`sub set` 写配置前的备份，留最近 5 份；
-  `reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
+  `reset --hard` 会删掉它）、`rules/`（`mihomo-cli rule` 的三个自定义域名文件）；
+  环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
   也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，唯一的写操作是 `sub set`：
   只动 `proxy-providers` 里的 `airport`、引用它的组，以及**缺失时才补**的那几条（分流规则、
