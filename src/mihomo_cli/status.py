@@ -92,20 +92,22 @@ def cmd_status(args: argparse.Namespace) -> int:
         log_line()
         rows = provider_overview()
         for i, p in enumerate(rows):
+            # 这一行只说"订阅源"自己的事：挂在哪几个组、本地缓存新不新。
+            # 节点数量/可用数归下面那行"节点"，别在两行里说同一批数字。
             bits = []
-            if p["nodes"]:
-                bits.append(
-                    f"{p['nodes']} 个节点"
-                    + (f"（可用 {p['alive']}）" if p["alive"] is not None else "")
-                )
-            elif p["cache"]:
-                bits.append(dim("节点数未知（内核没在跑）"))
             if p["groups"]:
                 bits.append("挂 " + "、".join(p["groups"]))
             else:
                 bits.append(dim("没有组在用"))
             if p["cache"]:
-                bits.append(f"缓存 {size_str(p['cache'])}（{_ago(p['age'])}）")
+                age = _ago(p["age"])
+                # 超过两倍 interval 还没刷，多半是机场线路挂了/链接过期——标出来
+                if p["interval"] and p["age"] > 2 * p["interval"]:
+                    bits.append(
+                        warn(f"缓存 {size_str(p['cache'])}（{age}刷 ⚠ 超过 interval 没刷）")
+                    )
+                else:
+                    bits.append(f"缓存 {size_str(p['cache'])}（{age}刷）")
             else:
                 bits.append(bad("未缓存"))
             line("订阅" if i == 0 else "", f"{p['name']}  " + dim("   ").join(bits))
@@ -115,13 +117,21 @@ def cmd_status(args: argparse.Namespace) -> int:
             alive = sum(p["alive"] or 0 for p in rows)
             untested = sum(p["untested"] or 0 for p in rows)
             fastest = min((p["fastest"] for p in rows if p["fastest"]), default=None)
+            tested = [p["tested_age"] for p in rows if p["tested_age"] is not None]
             if total:
-                v = f"{total} 个"
-                v += f"，可用 {alive}" if alive else "，" + warn("一个都没测通")
+                # "没测到"（没有测速记录）与"不可用"（测了但不通）是两回事：只有当前者多于
+                # 后者时才单独说一句，否则 可用 48/49 已经把"那 1 个"讲清楚了。
+                # 刚 sub update 完还没跑完一轮 healthcheck 时，这个数才会明显大起来。
+                unknown = untested - (total - alive)
+                v = f"可用 {alive}/{total}"
+                if unknown > 0:
+                    v += dim(f"，{untested} 个没测到")
                 if fastest:
                     v += f"，最快 {fastest[1]} {fastest[0]}ms"
-                if untested:
-                    v += dim(f"，{untested} 个没测到")
+                if tested:
+                    v += dim(f"，测于 {_ago(min(tested))}")
+                if not alive:
+                    v = warn(f"可用 0/{total}，一个都没测通")
             else:
                 v = dim("读不到（内核没在跑？）")
             line("节点", v)

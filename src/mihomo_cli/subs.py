@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 from .core import (
@@ -1192,6 +1193,24 @@ def cmd_sub_list(_: argparse.Namespace) -> int:
     return 0
 
 
+def _iso_ts(text: str | None) -> float | None:
+    """内核 history 里的时间戳（2026-09-21T13:30:44.493279+08:00）→ epoch 秒。"""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(text: str | None) -> int | None:
+    """config 里的 interval 是字符串（还有 "1h" 这类写法时解析失败就给 None）。"""
+    try:
+        return int(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def provider_overview() -> list[dict]:
     """订阅概览，给 status 用：挂在哪些组、内核里多少节点/几个可用/最快是哪个、本地缓存。
 
@@ -1217,11 +1236,14 @@ def provider_overview() -> list[dict]:
             n for n in ((live.get(p["name"]) or {}).get("proxies") or []) if isinstance(n, dict)
         ]
         delays = []
+        tested: list[float] = []
         for n in nodes:
             for extra in (n.get("extra") or {}).values():
                 hist = extra.get("history") or []
                 if hist and hist[-1].get("delay"):
                     delays.append((hist[-1]["delay"], n.get("name")))
+                if hist and (t := _iso_ts(hist[-1].get("time"))):
+                    tested.append(t)
         cache = _provider_cache(p)
         exists = cache.exists()
         out.append(
@@ -1232,6 +1254,11 @@ def provider_overview() -> list[dict]:
                 "alive": sum(1 for n in nodes if n.get("alive")) if nodes else None,
                 "fastest": min(delays) if delays else None,
                 "untested": len(nodes) - len(delays) if nodes else None,
+                # 最近一次 healthcheck 的时间（内核每 interval 秒测一轮），用来告诉人
+                # "可用 48" 这个数是几分钟前的；没测过就是 None
+                "tested_age": time.time() - max(tested) if tested else None,
+                # provider 的刷新间隔（config 里的 interval），给"多久没刷订阅"的判断用
+                "interval": _int_or_none(p.get("interval")),
                 "cache": cache.stat().st_size if exists else None,
                 "age": time.time() - cache.stat().st_mtime if exists else None,
             }
