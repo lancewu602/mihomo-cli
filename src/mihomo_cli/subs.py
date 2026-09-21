@@ -191,12 +191,32 @@ def _parse_groups(lines: list[str]) -> list[dict] | None:
     if span is None:
         return None
     head, end = span
+    # 组的两种写法都要认：
+    #   顶格（brew 装的默认配置就是这种）      缩进（标准 Clash 风格，机场/转换器给的配置基本都是）
+    #   proxy-groups:                        proxy-groups:
+    #   - name: 节点选择                       - name: 节点选择
+    #     type: select                          type: select
+    # 以第一个 `- ` 行的缩进为准，只有同缩进的 `- ` 才算新的一项——组里嵌套的 proxies:
+    # 列表项缩得更深，不会被误判成新组。
+    item_indent: int | None = None
+    for i in range(head + 1, end):
+        stripped = lines[i].lstrip()
+        if stripped.startswith("- "):
+            item_indent = len(lines[i]) - len(stripped)
+            break
+    if item_indent is None:
+        return []
+
     out = []
     for i in range(head + 1, end):
-        if not lines[i].startswith("- "):
+        stripped = lines[i].lstrip()
+        if not stripped.startswith("- ") or len(lines[i]) - len(stripped) != item_indent:
             continue
         stop = i + 1
-        while stop < end and not lines[stop].startswith("- "):
+        while stop < end:
+            s = lines[stop].lstrip()
+            if s.startswith("- ") and len(lines[stop]) - len(s) == item_indent:
+                break
             stop += 1
         blk = lines[i:stop]
         out.append(
@@ -212,7 +232,7 @@ def _parse_groups(lines: list[str]) -> list[dict] | None:
 
 
 def _group_field(blk: list[str], key: str) -> str | None:
-    pat = re.compile(rf"^(?:- )?\s*{key}:\s*(.+?)\s*$")
+    pat = re.compile(rf"^\s*(?:- )?\s*{key}:\s*(.+?)\s*$")
     for line in blk:
         if m := pat.match(line):
             return _scalar_of(m.group(1))
