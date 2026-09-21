@@ -94,11 +94,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             fastest = min((p["fastest"] for p in rows if p["fastest"]), default=None)
             if total:
                 v = f"{total} 个"
-                v += f"  ·  可用 {alive}" if alive else "  ·  " + warn("一个都没测通")
+                v += f"，可用 {alive}" if alive else "，" + warn("一个都没测通")
                 if fastest:
-                    v += f"  ·  最快 {fastest[1]} {fastest[0]}ms"
+                    v += f"，最快 {fastest[1]} {fastest[0]}ms"
                 if untested:
-                    v += dim(f"  ·  {untested} 个没测到")
+                    v += dim(f"，{untested} 个没测到")
             else:
                 v = dim("读不到（内核没在跑？）")
             line("节点", v)

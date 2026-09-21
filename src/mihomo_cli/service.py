@@ -178,7 +178,7 @@ def ensure_kernel_up(port: int, strict: bool | None = None) -> bool:
                 f"本机缺 lsof 和 ss，无法确认 {HOST}:{port} 上是不是 mihomo。\n"
                 f"  装其中一个再试：apt install lsof（或 iproute2）"
             )
-        print(dim("· 本机没有 lsof/ss，没法确认端口；直接让服务管理器确保内核在跑"))
+        print(dim("- 本机没有 lsof/ss，没法确认端口；直接让服务管理器确保内核在跑"))
 
     mgr = service_manager()
     if mgr is None:
@@ -191,7 +191,7 @@ def ensure_kernel_up(port: int, strict: bool | None = None) -> bool:
         die(f"启动内核服务失败：\n  {msg}")
     if not can_check_listener():
         return False
-    print(dim(f"· 内核没在跑，已交给 {mgr[1]} 拉起 {SERVICE_NAME}，等端口就绪…"))
+    print(dim(f"- 内核没在跑，已交给 {mgr[1]} 拉起 {SERVICE_NAME}，等端口就绪…"))
     if not wait_kernel(port):
         log = "brew services info mihomo" if mgr[0] == "brew" else "journalctl -u mihomo -n 50"
         die(
@@ -256,7 +256,7 @@ def restart_kernel(keep_log: bool = False) -> int:
     print(dim(f"内核服务  {label}（当前 {state or '未知'}）" + (f"，PID {old}" if old else "")))
     if not keep_log:
         # 先清再启：新起的启动日志留得住（配置错误就在那几行里）；想留旧日志就 --keep-log
-        print(dim(f"· {truncate_log()}"))
+        print(dim(f"- {truncate_log()}"))
     good, msg = service_ctl("restart")
     if not good:
         die(f"重启内核服务失败：\n  {msg}")

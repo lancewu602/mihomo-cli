@@ -178,11 +178,11 @@ def cmd_nics(_: argparse.Namespace) -> int:
     states = proxy_states(services)  # 一次读回（plist 优先），别在循环里逐张问
     print(dim("macOS 网卡（start / stop 的参数就是下面的名字，带空格要加引号）"))
     print()
-    print(f"    {pad('网卡', 22)}{pad('设备', 10)}{pad('状态', 12)}系统代理")
+    print(f"    {pad('网卡', 22)}{pad('设备', 10)}{pad('状态', 14)}系统代理")
     for s in services:
         name_cell = pad(s["name"], 22) if s["enabled"] else dim(pad(s["name"], 22))
-        plain = ("启用" if s["enabled"] else "已停用") + ("·活跃" if s["active"] else "")
-        state_cell = pad(plain, 12)
+        plain = ("启用" if s["enabled"] else "已停用") + ("（活跃）" if s["active"] else "")
+        state_cell = pad(plain, 14)  # "启用（活跃）" 占 12 列，留两列间隔
         if s["active"]:
             state_cell = state_cell.replace("活跃", ok("活跃"))
         elif not s["enabled"]:

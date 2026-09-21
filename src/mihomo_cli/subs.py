@@ -1100,13 +1100,13 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
             except OSError as e:
                 print(warn(f"    ⚠ 缓存写不进去（不影响内核拉）：{e}"))
             if stat := _fmt_userinfo(info):
-                print(dim(f"    · {stat}"))
+                print(dim(f"    - {stat}"))
 
         # 2) 让内核用上：PUT 刷这个 provider，不通就热重载
         if not live:
             print(
                 dim(
-                    "    · 内核"
+                    "    - 内核"
                     + (
                         "重启后才生效（控制接口连不上）"
                         if pid
@@ -1132,7 +1132,7 @@ def cmd_sub_update(_: argparse.Namespace) -> int:
                     # 503 = 内核自己没能把订阅拉下来（比如 provider 里的 proxy: 节点不通）
                     print(
                         dim(
-                            f"    · provider 接口返回 {code}：内核自己拉不动，"
+                            f"    - provider 接口返回 {code}：内核自己拉不动，"
                             f"走的是「读本地缓存」这条路"
                         )
                     )

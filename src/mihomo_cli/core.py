@@ -143,7 +143,7 @@ def dim(s: str) -> str:
 
 def note(msg: str) -> None:
     """解释"为什么选了这个网卡"。走 stderr，不污染 stdout，可以安全接管道。"""
-    print(dim("· " + msg), file=sys.stderr)
+    print(dim("- " + msg), file=sys.stderr)
 
 
 def width(s: str) -> int:
