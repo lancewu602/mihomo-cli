@@ -38,9 +38,6 @@ def _line(label: str, value: str) -> None:
     print(f"  {pad(label, 12)} {value}")
 
 
-# ─────────────────────────── kernel：内核层 ───────────────────────────
-
-
 def _proxy_target(name: str | None) -> dict:
     """`proxy start/stop` 要动哪张网卡：给了名字就按名字，没给就用活跃那张。"""
     services = list_services()
@@ -79,8 +76,6 @@ def proxy_status(name: str | None = None, show_all: bool = False) -> int:
             targets = services
         else:
             targets = [active]
-    # 展示当下状态：走 proxy_states()（系统 plist，ms 级）；plist 里没有的网卡会自动回退
-    # networksetup。原来这里是 N 张网卡 × 3 种协议各调一次 networksetup（0.7s）。
     all_states = proxy_states(services)
     bypass_map = plist_bypass_map()
     mine = f"{HOST}:{proxy_port()}"
@@ -145,6 +140,3 @@ def cmd_proxy(args: argparse.Namespace) -> int:
     if len(targets) > 1:
         print(dim(f"    共关闭 {len(targets)} 张网卡"))
     return 0
-
-
-# ─────────────────────────── 组合命令 ───────────────────────────

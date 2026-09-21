@@ -29,7 +29,7 @@ from .core import (
 )
 from .kernel import probe
 
-# 开代理时写入的绕过列表：这些地址根本不发给 mihomo（跟顺序表第 1 条 LocalAreaNetwork 对齐）。
+# 开代理时写入的绕过列表：这些地址根本不发给 mihomo。
 # 好处：内网请求少一跳，mihomo 重启那几秒里 NAS / 路由器也不会跟着断。
 BYPASS = [
     "localhost",
@@ -45,7 +45,7 @@ BYPASS = [
     "198.18.0.0/16",  # 基准测试段（TUN/fake-ip 常用）
     "169.254.0.0/16",  # 链路本地（APIPA、云元数据 169.254.169.254）
     "224.0.0.0/4",  # IPv4 组播（mDNS 224.0.0.251、SSDP 239.255.255.250）
-    # IPv6：注意规则树里没有 ff00::/8，这里是唯一一处拦住它的
+    # IPv6
     "fe80::/10",  # 链路本地
     "fc00::/7",  # ULA（含 fd00::/8）
     "ff00::/8",  # 组播
@@ -299,9 +299,7 @@ def require_macos(what: str, why: str = "它靠 networksetup 改系统的代理�
             f"  Linux 上没有 networksetup，系统代理这一层不适用；\n"
             f"  内核服务自己起：sudo systemctl start|stop|restart mihomo\n"
             f"  两端通用的命令：\n"
-            f"    mihomo-cli status / nics / logs\n"
-            f"    mihomo-cli sub add|list|nodes|update|rm\n"
-            f"    mihomo-cli rules diff / apply / geodata list"
+            f"    mihomo-cli status / nics / logs"
         )
 
 
@@ -452,7 +450,7 @@ def proxy_on(service: str) -> int:
 
 
 def teardown(service: str) -> str:
-    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。proxy stop 和回滚共用。
+    """关掉三种代理，并把绕过列表和代理地址还原成 start 之前的样子。
 
     顺序要紧：networksetup 写地址会顺手把代理打开，所以必须先写地址、再关开关。"""
     had_state, original, servers = load_original_state(service)

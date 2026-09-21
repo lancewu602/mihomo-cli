@@ -1,16 +1,21 @@
 # mihomo-cli
 
-管 mihomo（Clash.Meta 内核）的命令行工具：**内核服务、系统代理、订阅、规则、geodata、策略组、日志**，默认一条 `status` 一屏看完。
+管 mihomo（Clash.Meta 内核）的命令行工具：**系统代理、内核与出口观测、网卡、日志**，默认一条 `status` 一屏看完。
 
 零第三方依赖（只用 Python 标准库），一个目录丢到任何机器上就能跑。
 
+> 订阅 / 规则 / geodata / 策略组这几块已经不在本工具里了：它们要么往 `config.yaml` 里写，
+> 要么装内核数据文件，都是改内核本体的活。本工具只做两件事：**macOS 系统代理那一层**，
+> 以及**对运行中内核的只读观测**。
+
 ## 它解决什么
 
-内核本身只有一份 `config.yaml` 和一个 REST 控制接口，但日常要干的活很散：拉订阅、
-按自己的优先级拼规则树、把 geodata 实体放进内核目录、在 macOS 上开关系统代理、
-查当前出口和延迟、看日志涨到多大了……这些散在配置文件、控制接口和平台命令之间。
+内核本身只有一份 `config.yaml` 和一个 REST 控制接口，但日常要看的活很散：
+在 macOS 上开关系统代理、查当前出口和延迟、看日志涨到多大了、对着内核的只读状态
+排查“明明在跑怎么不通”……这些散在配置文件、控制接口和平台命令之间。
 
-这个工具把它们收成一条命令集，并且**每一次写配置都是"备份 → 写 → `mihomo -t` 校验 → 失败自动回滚"**。
+这个工具把它们收成一条命令集，**只读优先**：只写两处——macOS 的系统代理设置（可还原），
+以及工具自己的 `state.json`（存系统代理的原状态）。
 
 ## 平台差异
 
@@ -34,32 +39,15 @@ proxy start|stop|status [网卡名]
                          旧写法 proxy on / off 仍能用（别名），proxy show 改叫 proxy status
 
 nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
-status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 订阅 / 出口 / 连通性（默认动作）
-
-sub list                 列出订阅：节点数、刷新间隔、挂在哪些组、本地缓存
-sub add <链接>            加订阅，自动挂到带 use: 的代理组
-sub nodes [名字]          看某个订阅现在有哪些节点
-sub update               重新拉「正在用」的订阅，让内核当场重拉（节点增删/换 IP 靠它）
-sub rm <名字>             删订阅（会摘掉各组的 use: 引用；留下空组会被拦下）
-
-rules sync --from <ACL4SSR 目录>   从本地 clone 同步规则片段（不联网）
-rules diff               和 config.yaml 里的现有规则对比
-rules apply [--reload]   按代码里的顺序表拼好写进 config.yaml
-rules rollback --list    回滚到某次备份
-
-geodata list             数据文件现状（实体 / 内核目录 / 内核要不要 / sha256）
-geodata download         下载到工具目录（校验 sha256、原子落盘）
-geodata apply [--reload] 拷进内核配置目录，旧文件先备份
-
-group                    列策略组：类型、当前选中、选项数
-group <组名>              看它的选项（带编号）
-group <组名> <编号|名字>   切过去（立刻生效，写进内核缓存）
-group <组名> --test       测速：订阅节点交给内核整批测，其余逐个测并按延迟排
+status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
 
 logs [--truncate]        内核日志在哪、多大、级别；--truncate 清空
 ```
 
 每个子命令的开关：`mihomo-cli <命令> --help`。
+
+改 `config.yaml`（订阅、规则、geodata、策略组默认选中）都是手工活：本工具不碰它。
+`group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板（`external-controller`）即可。
 
 ## 文档
 
@@ -75,14 +63,10 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 ## 数据与配置
 
-- 工具数据在 `~/.config/mihomo-cli/`：`rules/`（规则片段）、`geodata/`（数据实体）、
-  `state.json`（macOS 系统代理的原状态）、`backups/`（config.yaml 备份，留最近 5 份）；
+- 工具数据在 `~/.config/mihomo-cli/`：`state.json`（macOS 系统代理的原状态）；
   环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
-  也可以用 `MIHOMO_DIR` 指定。
-- 规则顺序表钉在代码里（`src/mihomo_cli/rules.py` 的 `CANONICAL_ORDER`），不依赖外部 order 文件：
-  「局域网 → 白名单 → 拦截 → 我自己的 → 必须直连 → 必须代理 → 地域大清单 → 兜底」，
-  自己的片段永远优先于上游的粗规则。
+  也可以用 `MIHOMO_DIR` 指定。本工具只读它里面的 `config.yaml`。
 
 ## 安装
 
@@ -120,7 +104,7 @@ brew install mihomo && brew services start mihomo && mihomo-cli proxy start
 # Debian/Ubuntu（用官方 deb，自带 systemd unit，装完 /etc/mihomo/config.yaml 是极简默认配置）
 sudo dpkg -i mihomo-linux-amd64-*.deb
 sudo systemctl enable --now mihomo
-mihomo-cli sub add <订阅链接> && mihomo-cli proxy start
+mihomo-cli status
 ```
 
 > 源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，

@@ -1,4 +1,4 @@
-"""地基：常量、路径探测、输出小工具、跑外部命令、config.yaml 读写、备份与校验。
+"""地基：常量、路径探测、输出小工具、跑外部命令、读 config.yaml、调控制接口。
 
 所有子命令都依赖它；它自己不认识任何子命令。
 """
@@ -12,7 +12,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -24,11 +23,9 @@ from typing import NoReturn
 HOST = "127.0.0.1"  # 代理监听地址
 FALLBACK_PORT = 7890  # 配置文件读不到时的兜底端口
 
-# ── 平台 ──
 # 系统代理开关靠 networksetup，只有 macOS 有；Linux 上内核服务走 systemd。
 IS_MACOS = sys.platform == "darwin"
 SERVICE_HINT = "brew services start mihomo" if IS_MACOS else "systemctl start mihomo"
-RESTART_HINT = "brew services restart mihomo" if IS_MACOS else "systemctl restart mihomo"
 
 # 配置目录候选：第一个含 config.yaml 的胜出（macOS 是 brew 的 /opt/homebrew/etc/mihomo，
 # Linux 常见 /etc/mihomo）。
@@ -117,8 +114,8 @@ def service_manager() -> tuple[str, str] | None:
 
 _TTY = sys.stdout.isatty()
 
-# 行缓冲：逐条打进度的命令（rules sync / sub add）被重定向或接管道时默认是块缓冲，
-# 过程里什么都看不到（実踩过：接 tail 同步片段，等了三分钟屏幕上一片空白）。
+# 行缓冲：重定向 / 接管道时 Python 默认块缓冲，输出攒着一块块才刷；
+# 开成逐行刷，stdout 和 stderr（note / die 走 stderr）的先后才对得上。
 with contextlib.suppress(AttributeError, OSError):
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -196,24 +193,6 @@ def proxy_port() -> int:
     return FALLBACK_PORT
 
 
-def http_get(
-    url: str,
-    proxy: str | None = None,
-    timeout: float = 30.0,
-    limit: int = 0,
-    ua: str = "mihomo-cli",
-) -> bytes:
-    """下载一个 URL。proxy 形如 http://127.0.0.1:7890，None 表示直连。"""
-    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})]
-    opener = urllib.request.build_opener(*handlers)
-    req = urllib.request.Request(url, headers={"User-Agent": ua})
-    with opener.open(req, timeout=timeout) as r:
-        data = r.read(limit + 1) if limit else r.read()
-    if limit and len(data) > limit:
-        raise ValueError(f"内容超过 {size_str(limit)}，已中止")
-    return data
-
-
 def listener(port: int) -> list[tuple[str, str]]:
     """返回监听该端口的 [(命令名, PID)]。看不到主人、或工具没装时返回空列表。
 
@@ -247,7 +226,6 @@ def port_bound(port: int) -> bool:
 
 
 def _port_bound_netstat(port: int) -> bool:
-    """macOS：netstat 的 LISTEN 行里有没有这个端口。"""
     p = run("netstat", "-an", "-p", "tcp")
     for line in p.stdout.splitlines():
         parts = line.split()
@@ -343,145 +321,5 @@ def api(path: str) -> dict | None:
     return data if status == 200 else None
 
 
-def config_path() -> Path:
-    return MIHOMO_DIR / "config.yaml"
-
-
-def require_config() -> Path:
-    """拿 config.yaml；找不到就把所有试过的路径列出来。"""
-    cfg = config_path()
-    if cfg.exists():
-        return cfg
-    tried = "\n".join(f"    {c}" for c in MIHOMO_DIR_CANDIDATES)
-    die(
-        f"找不到 config.yaml（当前用的是 {MIHOMO_DIR}）\n"
-        f"  用环境变量指定：MIHOMO_DIR=/etc/mihomo mihomo-cli ...\n"
-        f"  或者确认它在下列位置之一：\n{tried}"
-    )
-
-
-BACKUP_DIR = TOOL_DIR / "backups"  # 备份跟规则/状态住一起，不占 mihomo 的配置目录
-BACKUP_KEEP = 5  # 只保留最近 N 个
-
-
-def fmt_ts(ts: str) -> str:
-    """20260920-174755 → 2026-09-20 17:47:55（带序号则缀在后面）。"""
-    d, _, rest = ts.partition("-")
-    t, _, extra = rest.partition("-")
-    s = (
-        f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
-        if len(d) == 8 and len(t) == 6
-        else ts
-    )
-    return f"{s}（第 {extra} 份）" if extra else s
-
-
-def backup_config() -> Path:
-    """把当前 config 备份一份，返回备份路径。
-
-    必须保证备份成功才继续：没备份就写文件，等于把回滚能力赌掉。"""
-    cfg = config_path()
-    base = f"{cfg.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-    bak = BACKUP_DIR / base
-    try:
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        n = 2
-        while bak.exists():
-            bak = BACKUP_DIR / f"{base}-{n}"
-            n += 1
-        shutil.copy2(cfg, bak)
-    except OSError as e:
-        die(f"备份失败，拒绝继续写配置：{e}")
-    for old in sorted(BACKUP_DIR.glob(f"{cfg.name}.bak-*"))[:-BACKUP_KEEP]:
-        old.unlink(missing_ok=True)
-    return bak
-
-
-def validate_config() -> tuple[bool, str]:
-    """跑 mihomo -t。返回 (是否通过, 最有信息量的一行输出)。"""
-    p = run(str(MIHOMO_BIN), "-t", "-d", str(MIHOMO_DIR))
-    out = (p.stdout + p.stderr).strip()
-    lines = [line for line in out.splitlines() if line.strip()]
-    if p.returncode == 0 and "test is successful" in out:
-        return True, lines[-1] if lines else "（无输出）"
-    for line in lines:
-        if "level=error" in line:
-            return False, line
-    return False, lines[-1] if lines else "（无输出）"
-
-
-def reload_config() -> bool:
-    """让运行中的 mihomo 重新读配置。"""
-    controller = read_config("external-controller") or f"{HOST}:9090"
-    body = json.dumps({"path": str(config_path())}).encode()
-    req = urllib.request.Request(f"http://{controller}/configs?force=true", data=body, method="PUT")
-    if secret := read_config("secret"):
-        req.add_header("Authorization", f"Bearer {secret}")
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return 200 <= r.status < 300
-    except (urllib.error.URLError, OSError):
-        return False
-
-
-def list_backups() -> list[tuple[str, Path, Path]]:
-    """列出可用备份：[(时间戳, 路径, 所在目录)]，新 → 旧。"""
-    cfg = config_path()
-    items: list[tuple[str, Path, Path]] = [
-        (p.name.rsplit(".bak-", 1)[-1], p, src)
-        for src in (BACKUP_DIR, cfg.parent)
-        for p in src.glob(f"{cfg.name}.bak-*")
-    ]
-    return sorted(items, key=lambda x: x[0], reverse=True)
-
-
 def size_str(n: int) -> str:
     return f"{n} 字节" if n < 1024 else f"{n / 1024:.0f} KB"
-
-
-def controller_put(path: str, timeout: float = 30) -> int:
-    """往控制接口发一个 PUT，返回 HTTP 状态码（连不上给 0），绝不抛异常。"""
-    controller = read_config("external-controller") or f"{HOST}:9090"
-    req = urllib.request.Request(f"http://{controller}{path}", method="PUT")
-    if secret := read_config("secret"):
-        req.add_header("Authorization", f"Bearer {secret}")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status
-    except urllib.error.HTTPError as e:
-        return e.code
-    except (urllib.error.URLError, OSError, ValueError):
-        return 0
-
-
-def commit_config(cfg: Path, lines: list[str], doing: str, reload: bool) -> bool:
-    """备份 → 写 → mihomo -t 校验 → 失败回滚。写盘的唯一出口，两条子命令共用。"""
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
-    text = "".join(lines)
-    bak = backup_config()
-    print(f"{ok('✓')} 已备份 {dim(str(bak))}")
-    try:
-        cfg.write_text(text, encoding="utf-8", newline="\n")
-    except OSError as e:
-        # 权限不够/磁盘满这类问题在配置目录属主是 root 的机器上很常见，
-        # 得给一句人话，而不是抛一段 traceback
-        die(f"写 {cfg} 失败：{e}\n  配置没改成（备份还在 {bak}）")
-    print(f"{ok('✓')} 已写入 {doing}")
-
-    good, last = validate_config()
-    if not good:
-        shutil.copy2(bak, cfg)
-        print(bad(f"✗ mihomo -t 校验失败，已回滚到 {bak}"))
-        print(bad(f"  {last}"))
-        return False
-    print(f"{ok('✓')} mihomo -t 校验通过  {dim(last)}")
-
-    if reload:
-        if reload_config():
-            print(f"{ok('✓')} 已热重载运行中的 mihomo  {dim('（通过 external-controller API）')}")
-        else:
-            print(warn(f"⚠ 热重载失败，配置文件已写入，可以 {RESTART_HINT}"))
-    else:
-        print(dim("  没有热重载；加 --reload 让它立即生效（否则等下次重启 mihomo）"))
-    return True

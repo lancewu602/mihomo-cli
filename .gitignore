@@ -12,8 +12,7 @@ dist/
 # macOS
 .DS_Store
 
-# 规则片段、状态、备份都不在仓库里了：它们住 ~/.config/mihomo-cli/
-# （规则是数据不是代码，仓库跟着 clone 到哪都行，数据得有个稳定住处）
+# 工具状态不在仓库里：它住 ~/.config/mihomo-cli/（state.json，macOS 系统代理的原状态）。
 
 # mihomo 的数据文件（geoip.metadb 等）：GPL 的第三方二进制，几 MB 一个，不入库。
 # 工具不碰它们——mihomo 只认配置目录里那份，缺了它自己会去下。

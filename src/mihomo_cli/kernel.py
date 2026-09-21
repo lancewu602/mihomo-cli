@@ -30,13 +30,11 @@ PROCESS_NAME = "mihomo"  # 内核可执行文件的名字（服务名 SERVICE_NA
 
 
 def _pid_from_pgrep() -> str | None:
-    """问 pgrep（macOS 的正路：进程名精确匹配走 libproc）。"""
     p = run("pgrep", "-x", PROCESS_NAME)
     return p.stdout.split()[0] if p.returncode == 0 and p.stdout.split() else None
 
 
 def _pid_from_proc() -> str | None:
-    """扫 /proc（Linux 的正路）：/proc/<pid>/comm 精确等于进程名。"""
     try:
         entries = list(Path("/proc").iterdir())
     except OSError:  # 没挂 /proc 的怪容器
@@ -239,7 +237,6 @@ def service_status() -> tuple[str, str]:
             return "stopped", label
         return state, label  # error / unknown 原样透出去，别吞
 
-    # Linux：systemd 的 unit
     p = run("systemctl", "is-active", SERVICE_NAME)
     state = p.stdout.strip() or "unknown"
     if state == "active":

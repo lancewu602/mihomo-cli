@@ -166,7 +166,7 @@ def nics_linux() -> int:
             "  服务端要让流量走内核就两条路：内核 TUN（config.yaml 的 tun:）或给进程设 http_proxy；"
         )
     )
-    print(dim("  节点/端口/出口看 mihomo-cli status，订阅和规则用 sub / rules"))
+    print(dim("  节点/端口/出口看 mihomo-cli status；改 config.yaml（订阅/规则）是手工活"))
     return 0
 
 

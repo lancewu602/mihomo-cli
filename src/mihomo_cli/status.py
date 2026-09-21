@@ -27,19 +27,7 @@ from .core import (
 )
 from .kernel import current_node, mihomo_pid, probe, service_status
 from .logs import find_log_file
-from .subs import provider_overview
 from .systemproxy import active_service, list_services, proxy_states
-
-
-def _ago(secs: float) -> str:
-    """ "多久以前"，粗粒度就够。"""
-    if secs < 90:
-        return f"{secs:.0f} 秒前"
-    if secs < 3600:
-        return f"{secs / 60:.0f} 分钟前"
-    if secs < 86400:
-        return f"{secs / 3600:.0f} 小时前"
-    return f"{secs / 86400:.0f} 天前"
 
 
 def cmd_status(_: argparse.Namespace) -> int:
@@ -52,7 +40,7 @@ def cmd_status(_: argparse.Namespace) -> int:
     bound = bool(found) or port_bound(port)
 
     # 连通性探测是这屏里最贵的一步（穿代理发两次请求核对 unified-delay，实测 ~0.6s），
-    # 所以先丢到线程里跑，等下面把订阅/节点/日志都拼完再来收结果——行的顺序不变，
+    # 所以先丢到线程里跑，等下面把日志 / 网卡 / 出口都拼完再来收结果——行的顺序不变，
     # 整体从"各步相加"变成"等最慢那一步"。
     # 认不出主人时照样探（只要不是**已知的别人**在听）：不然内核以 root 跑的机器上这行永远不出现。
     probe_pool = (
@@ -72,78 +60,28 @@ def cmd_status(_: argparse.Namespace) -> int:
     def line(label: str, value: str) -> None:
         print(f"  {pad(label, 12)} {value}")
 
-    def info_block() -> None:
-        """日志 / 订阅 / 节点：都是「看一眼」的信息，排在出口和连通性前面。"""
-
-        # 日志排最上面：它是"内核在往哪写、写了多少"这种静态信息，先看一眼再管节点
-        def log_line() -> None:
-            level = read_config("log-level") or "（没写）"
-            path, where = find_log_file()
-            if path and path.exists():
-                line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
-            elif not IS_MACOS and service_manager() is not None:
-                # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件。
-                # 这行的前提是**本机真有 systemd**：不然它会跟上面“内核服务 本机没找到 brew 或
-                # systemd”自相矛盾，还给出一个跑不通的 journalctl。没 systemd 就走下面那条实话。
-                usage = re.search(
-                    r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
-                )
-                line(
-                    "日志",
-                    dim("journald（自动轮转）")
-                    + (f"  整机 {usage.group(1)}" if usage else "")
-                    + f"  级别 {level}"
-                    + dim("  journalctl -u mihomo"),
-                )
-            else:
-                line("日志", warn(f"{where}  级别 {level}"))
-
-        log_line()
-        rows = provider_overview()
-        for i, p in enumerate(rows):
-            # 这一行只说"订阅源"自己的事：挂在哪几个组、本地缓存新不新。
-            # 节点数量/可用数归下面那行"节点"，别在两行里说同一批数字。
-            bits = []
-            if p["groups"]:
-                bits.append("挂 " + "、".join(p["groups"]))
-            else:
-                bits.append(dim("没有组在用"))
-            if p["cache"]:
-                age = _ago(p["age"])
-                # 超过两倍 interval 还没刷，多半是机场线路挂了/链接过期——标出来
-                if p["interval"] and p["age"] > 2 * p["interval"]:
-                    bits.append(
-                        warn(f"缓存 {size_str(p['cache'])}（{age}刷 ⚠ 超过 interval 没刷）")
-                    )
-                else:
-                    bits.append(f"缓存 {size_str(p['cache'])}（{age}刷）")
-            else:
-                bits.append(bad("未缓存"))
-            line("订阅" if i == 0 else "", f"{p['name']}  " + dim("   ").join(bits))
-
-        if rows:
-            total = sum(p["nodes"] or 0 for p in rows)
-            alive = sum(p["alive"] or 0 for p in rows)
-            untested = sum(p["untested"] or 0 for p in rows)
-            fastest = min((p["fastest"] for p in rows if p["fastest"]), default=None)
-            tested = [p["tested_age"] for p in rows if p["tested_age"] is not None]
-            if total:
-                # "没测到"（没有测速记录）与"不可用"（测了但不通）是两回事：只有当前者多于
-                # 后者时才单独说一句，否则 可用 48/49 已经把"那 1 个"讲清楚了。
-                # 刚 sub update 完还没跑完一轮 healthcheck 时，这个数才会明显大起来。
-                unknown = untested - (total - alive)
-                v = f"可用 {alive}/{total}"
-                if unknown > 0:
-                    v += dim(f"，{untested} 个没测到")
-                if fastest:
-                    v += f"，最快 {fastest[1]} {fastest[0]}ms"
-                if tested:
-                    v += dim(f"，测于 {_ago(min(tested))}")
-                if not alive:
-                    v = warn(f"可用 0/{total}，一个都没测通")
-            else:
-                v = dim("读不到（内核没在跑？）")
-            line("节点", v)
+    def log_line() -> None:
+        """日志那行：内核在往哪写、写了多少——静态信息，看一眼就好。"""
+        level = read_config("log-level") or "（没写）"
+        path, where = find_log_file()
+        if path and path.exists():
+            line("日志", f"{path}  {size_str(path.stat().st_size)}  级别 {level}")
+        elif not IS_MACOS and service_manager() is not None:
+            # Linux 默认交给 journald（自己轮转）；只有 unit 写了 append: 才是文件。
+            # 这行的前提是**本机真有 systemd**：不然它会跟上面“内核服务 本机没找到 brew 或
+            # systemd”自相矛盾，还给出一个跑不通的 journalctl。没 systemd 就走下面那条实话。
+            usage = re.search(
+                r"take up ([\d.]+ ?[KMGTP]?B?)", run("journalctl", "--disk-usage").stdout
+            )
+            line(
+                "日志",
+                dim("journald（自动轮转）")
+                + (f"  整机 {usage.group(1)}" if usage else "")
+                + f"  级别 {level}"
+                + dim("  journalctl -u mihomo"),
+            )
+        else:
+            line("日志", warn(f"{where}  级别 {level}"))
 
     # 网卡 / 系统代理这一块是 macOS 专有的，其余部分两端一样。
     # 只看走默认路由那张（active_service 刻意不猜）；要看别的网卡用 proxy status --all。
@@ -195,7 +133,7 @@ def cmd_status(_: argparse.Namespace) -> int:
 
     if not IS_MACOS:
         line("系统代理", dim("macOS 专用（networksetup），本机不适用"))
-        info_block()
+        log_line()
         if node := current_node():
             chain, delay = node
             lat = f"{delay}ms" if delay else dim("无延迟数据")
@@ -204,8 +142,6 @@ def cmd_status(_: argparse.Namespace) -> int:
         return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
-    # 一次读回所有网卡的代理设置：走系统 plist（~ms），plist 里没有的网卡才问 networksetup。
-    # 原来这里是"每张网卡 × 每种协议"各调一次 networksetup，7 张网卡就是 21 次、0.6s。
     states_map = proxy_states(services)
     opened = [
         name for name, kinds in states_map.items() if any(p["enabled"] for p in kinds.values())
@@ -233,7 +169,7 @@ def cmd_status(_: argparse.Namespace) -> int:
                 warn("还开着代理：" + "、".join(others) + "（mihomo-cli proxy stop 可关）"),
             )
 
-    info_block()
+    log_line()
 
     if node := current_node():
         chain, delay = node

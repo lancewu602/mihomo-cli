@@ -5,7 +5,7 @@
 | 谁 | 管什么 | 用什么 |
 |---|---|---|
 | **系统原生命令** | 内核的启动 / 停止 / 重启 | `brew services start\|stop\|restart mihomo`（macOS）、`sudo systemctl start\|stop\|restart mihomo`（Linux） |
-| **本工具** | 系统代理那一层（macOS `networksetup`）、订阅、规则、geodata | `proxy start\|stop\|status`、`sub` / `rules` / `geodata` |
+| **本工具** | 系统代理那一层（macOS `networksetup`） | `proxy start\|stop\|status` |
 | **本工具（只读）** | 内核状态：进程、端口、服务、控制接口、出口、连通性 | `status`、`nics`、`logs`、`kernel.service_status()` |
 
 启停内核是服务管理器的活（常驻、开机自启、崩了重拉），本工具**不再代劳**：
@@ -109,7 +109,7 @@ Linux  root 起的监听，nobody 跑：ss -ltnp → 有那行、但没有 users
 | `proxy status` | 不要 | 只读系统代理现状 |
 | `proxy stop` | **不要** | 安全动作：内核被卸载/挪走后系统代理还指着死端口时，靠它救场 |
 | `proxy start` | 要 | 要读 config 的端口、还要确认内核在监听（安全不变式） |
-| `status` / `logs` / `sub` / `rules` / `geodata` / `group` | 要 | 都要内核或它的配置 |
+| `status` / `logs` | 要 | 都要内核或它的配置 |
 
 在"内核没装"的机器上把 `nics` 也拦下是实测踩到过的：新服务器上想先看网卡再装内核，工具却
 直接退出了。
