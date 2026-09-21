@@ -7,7 +7,8 @@
 #   make build-onefile  单文件：dist/mihomo-cli（就一个文件，但每次启动都要解包）
 #   make check          跑一遍产物（--help；本机装了 mihomo 时顺带 status）
 #                       make check BIN=dist/mihomo-cli 可以单独验单文件那份
-#   make install        拷到 $(PREFIX)/bin（默认 /usr/local，可能要 sudo）
+#   make install        装到 $(PREFIX)/bin（默认 /usr/local；目录版会整目录装 + 放个 exec 包装）
+#   make uninstall      从 $(PREFIX) 移除
 #   make clean          删掉 build/ 与 dist/
 #
 # 为什么默认是目录版：单文件每次启动都要把 ~8 MB 解包成一个新的临时可执行文件，
@@ -16,6 +17,7 @@
 # 两个平台命令完全一样；平台差异（架构、glibc、签名）也在那篇里。
 
 PREFIX ?= /usr/local
+LIBEXEC = $(PREFIX)/libexec/mihomo-cli
 VENV   ?= .venv
 DIST   ?= dist
 BUILD  ?= build
@@ -33,7 +35,7 @@ RUFF ?= $(shell if [ -x $(VENV)/bin/ruff ]; then echo $(VENV)/bin/ruff; \
                  elif command -v ruff >/dev/null 2>&1; then echo ruff; \
                  else echo "uvx ruff"; fi)
 
-.PHONY: build build-onefile deps lint fmt check install clean
+.PHONY: build build-onefile deps lint fmt check install uninstall clean
 
 build: $(ONEDIR)
 build-onefile: $(ONEFILE)
@@ -64,10 +66,27 @@ check:
 	@$(BIN) status > /dev/null 2>&1 && echo "  status 冒烟：通过" \
 		|| echo "  status 冒烟：跳过（本机没装 mihomo，或内核没在跑）"
 
+# 装哪个由 BIN 决定（默认目录版）。目录版**必须整目录装**：那个 2 MB 的可执行文件
+# 要和同目录的 _internal/ 一起才跑得起来，单独拷出去会报找不到 Python 运行时。
+# 所以目录版装到 $(PREFIX)/libexec/mihomo-cli/，bin 里放一个两行的 exec 包装脚本。
 install:
-	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-dir）"; exit 1; }
-	install -m 0755 $(BIN) $(PREFIX)/bin/mihomo-cli
-	@echo "已装到 $(PREFIX)/bin/mihomo-cli"
+	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-onefile）"; exit 1; }
+	@mkdir -p $(PREFIX)/bin
+	@if [ "$(BIN)" = "$(ONEDIR)" ]; then \
+		rm -rf $(LIBEXEC) && mkdir -p $(LIBEXEC) && \
+		cp -R $(dir $(ONEDIR)). $(LIBEXEC)/ && \
+		printf '#!/bin/sh\nexec %s/mihomo-cli "$$@"\n' "$(LIBEXEC)" > $(PREFIX)/bin/mihomo-cli && \
+		chmod 0755 $(PREFIX)/bin/mihomo-cli && \
+		echo "已装到 $(PREFIX)/bin/mihomo-cli（实体在 $(LIBEXEC)/）"; \
+	else \
+		install -m 0755 $(BIN) $(PREFIX)/bin/mihomo-cli && \
+		echo "已装到 $(PREFIX)/bin/mihomo-cli"; \
+	fi
+
+uninstall:
+	rm -f $(PREFIX)/bin/mihomo-cli
+	rm -rf $(LIBEXEC)
+	@echo "已从 $(PREFIX) 移除"
 
 clean:
 	rm -rf $(BUILD) $(DIST)
