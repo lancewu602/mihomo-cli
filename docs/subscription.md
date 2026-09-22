@@ -9,7 +9,7 @@
 |---|---|---|
 | `sub set <链接>`（没设过） | 写 provider 块；缺组、缺 MATCH 规则就补一份最小可用的 | 是 |
 | `sub set <链接>`（链接变了） | 旧块整块丢掉、旧缓存删掉，新链接全量接管 | 是 |
-| `sub set <链接>`（链接没变） | 只让内核重拉节点；**但缺的全局设置会补上**（只补缺的、不覆盖） | 一般**不碰**；只有补全局设置那一次会写 |
+| `sub set <链接>`（链接没变） | 只让内核重拉节点；**但缺的全局设置与缺的规则会补上**（只补缺的、不覆盖） | 一般**不碰**；只有补件那一次会写 |
 | `sub update` | 让内核当场重拉节点（跟上一行的差别只是不接受链接参数） | 不碰 |
 | `sub show` | 链接 / 缓存文件 / 挂在哪个组 / 内核那边多少节点 | 不碰 |
 | `sub nodes [--delay]` | 列节点：序号 / 名字 / 类型 / 延迟 / 存活，`●` 标当前出口 | 不碰 |
@@ -178,7 +178,7 @@ profile:
   - 开了之后 GEOIP 国家名**会被 `mihomo -t` 校验**：写成 `GEOIP,ZZTOP` 这种，校验直接失败
     （`[GeoIP] failed to decode geodata file: GeoIP.dat … country code nosuchcountry`），
     而 mmdb 模式下同样写错**居然能过**。对「写完就 `-t`、不过就回滚」的流程，这是一道白拿的护栏；
-  - 附带白拿一批类別（v2ray-rules-dat 的 README 列的）：`geoip:telegram`(12 条) /`netflix`(120)
+  - 附带白拿一批类别（v2ray-rules-dat 的 README 列的）：`geoip:telegram`(12 条) /`netflix`(120)
     /`google`(8360) /`cloudflare`(710) /`cloudfront`(211) /`facebook`(123) /`twitter`(19) /`tor`(798)
     /`fastly`(90)。
   - 代价：`geo-auto-update` 每天按 geodata 的 enable 情况刷文件，开了它刷的是这两份 `.dat`
@@ -271,10 +271,10 @@ TCP 172.25.56.20:49676->185.199.109.133:443 (SYN_SENT)      # objects.githubuser
 | `geosite.dat` | 11.08 MB | 4.24 MB |
 | `category-ads-all` | **190,384 条** | 911 条 |
 | `cn` / `geolocation-!cn` | 111,177 / 27,248 | 111,021 / 27,204 |
-| 本工具文档里那批类別（77 个） | 全在 | 全在 |
-| 独有类別 | `china-list` 110,433、`apple-cn` 165、`google-cn` 112、`tld-cn` 49、`icloud` 53、`steam@cn` 17、`category-games@cn` 38、`win-spy` 327、`win-update` 364 | `category-companies` 等同名类別条数略有差异 |
+| 本工具文档里那批类别（77 个） | 全在 | 全在 |
+| 独有类别 | `china-list` 110,433、`apple-cn` 165、`google-cn` 112、`tld-cn` 49、`icloud` 53、`steam@cn` 17、`category-games@cn` 38、`win-spy` 327、`win-update` 364 | `category-companies` 等同名类别条数略有差异 |
 
-两家都源自 `v2fly/domain-list-community`，所以类別名字一整套都对得上（我用 77 个类別逐个
+两家都源自 `v2fly/domain-list-community`，所以类别名字一整套都对得上（我用 77 个类别逐个
 `mihomo -t` 验过，两边都是 77/77 全在）；差在**广告表大小**和 Loyalsoldier 自己加的那几类。
 骨架上那条 `GEOSITE,category-ads-all,REJECT` 就是图这个——用 MetaCubeX 那份它只有 911 条，
 拦不住什么；换成这份之后它才真算「广告拦截」，而且**零额外依赖、零额外下载**
@@ -316,6 +316,17 @@ sha256 都是 `f3370cf391831bb0…`，说明这份数据本来就是同一个产
 190k 的广告表，两个办法：把 `geox-url` 那一节删了再 `sub set`（会按新源整节补全），
 或者自己把 `geosite` / `geoip` 两行改成上面的地址。
 
+**换完还差一步：把内核目录里那份 `GeoSite.dat` 删掉。** 内核只在**文件缺失**时才下载：
+URL 改了、文件还在，它就继续用旧的那份（实测：`geox-url` 已经是 Loyalsoldier 的地址，
+可目录里仍是早先下的 MetaCubeX 文件——启动日志里 `category-ads-all records: 911`、
+`cn records: 111021`）。删掉再重启内核，它会按新地址重下 11.08 MB（实测 4 秒），
+records 变成 190,384 / 111,177。`geoip.dat` 不用管：两家那份逐字节相同。
+
+```bash
+rm /opt/homebrew/etc/mihomo/GeoSite.dat && brew services restart mihomo
+# 日志里应该看到：Can't find GeoSite.dat, start download → Download GeoSite.dat finish
+```
+
 **那老配置什么时候才会真被补上？** 同一个链接再跑一次 `sub set` 就会——这是「链接没变」
 那条路上**唯一会写盘**的情形（下面详说）：把缺的全局键和缺的规则都补上。反过来说，
 升级上来的配置不用换链接、不用 reset，随手 `mihomo-cli sub set <你那条链接>` 就补齐了
@@ -341,7 +352,7 @@ rules 里也没 `private` / `category-ads-all`）时走一次写盘：备份 →
 订阅块（`proxy-providers` 里那个 `airport`）全程一个字节也没动。
 
 实测（拿一份老配置：`geox-url` 是旧值 + rules 只有 `GEOSITE,cn,DIRECT` + `MATCH,节点选择`，
-同一个链接再跑 `sub set`）——只动了这两处，`geox-url` 旧值一个字节没变，**末尾那条兑底也没
+同一个链接再跑 `sub set`）——只动了这两处，`geox-url` 旧值一个字节没变，**末尾那条兜底也没
 被碰**（它仍是 `MATCH,节点选择`，即老配置继续跑白名单模式）：
 
 ```diff
@@ -482,8 +493,8 @@ url 一律加双引号：机场链接里 `?`、`&`、`#` 都常见，plain 标�
 它们在列表里排第一，而策略组的**默认选中就是第一个**——不排掉的后果不是「多几个花名字」而是
 **流量被送到假节点上**（实测：`节点选择` 的 `now` 就是那个「剩余流量」，而不是任何真节点）。
 
-`(?i)公告|网站地址|剩余流量|过期时间` 这几个词来自仓库历史（被删掉的 `subs.py` 里叫
-`SUB_EXCLUDE`），实测在这个机场上把 54 个「节点」里的 5 个假节点全挡掉了（49 个真节点，
+`(?i)公告|网站地址|剩余流量|过期时间` 这几个词来自仓库历史（`subs.py` 里就是 `SUB_EXCLUDE`，
+写进配置的 `exclude-filter`），实测在这个机场上把 54 个「节点」里的 5 个假节点全挡掉了（49 个真节点，
 默认选中变成 `加拿大 中继-1(1.5x)`）。
 名字里真带这几个词的真节点几乎不可能有；真被误伤了就删掉这一行，或者改成正则只留你要的。
 
@@ -542,11 +553,19 @@ networksetup 还会让人以为工具动了系统设置。
 - **同名文件不等于同一份内容**。`geosite.dat` 这名字下至少有两份不同的东西：
   `MetaCubeX/meta-rules-dat@release` 那份 4.24 MB、`Loyalsoldier/v2ray-rules-dat@release`
   那份 11.08 MB（`cn` 111,021 vs 111,177、`category-ads-all` **911 vs 190,384**）。
-  两份都源自 `v2fly/domain-list-community`，类別名字对得上，但覆盖不一样——所以「换了源」
+  两份都源自 `v2fly/domain-list-community`，类别名字对得上，但覆盖不一样——所以「换了源」
   会静默改变分流结果。反过来 `geoip.dat` 两边 sha256 完全相同（`f3370cf3…`），那是同一产物。
 - **`1.19.31` 的 `geox-url` 默认源都是 github.com**，手册里 `geox-url` 那段 jsdelivr 地址是
   示例值（这条上面写过了，但真容易记反）：实测 `GeoIP.dat` / `GeoIP.metadb` 都是去连
   `github.com` 加一条卡在 `SYN_SENT` 的 `objects.githubusercontent.com`。
+- **`www.gstatic.com` 在 Loyalsoldier 那份 geosite.dat 里属于 `cn`**，而骨架里 `GEOSITE,cn,DIRECT`
+  又排在前面 → `start` 的连通性探测（请求打本地代理端口，**走 rules**）实际打的是**直连**：
+  实测日志 `--> www.gstatic.com:443 match GeoSite(cn) using DIRECT`。换成 MetaCubeX 那份数据时
+  它属于 `gfw`、日志是 `match GeoSite(gfw) using 节点选择`——也就是换源悄悄换掉了“探测到底
+  在测什么”。探通只说明这条链路通，不等于代理通。想让它真去测代理，把 `TEST_URL` 换成骨架
+  会送进代理的地址（实测 `https://www.google.com/generate_204` → `match GeoSite(gfw)`，
+  204 in 1.9s），或者临时 `MIHOMO_TEST_URL=… mihomo-cli start` 覆盖。注意同一个
+  `TEST_URL` 还写在 url-test 组的 `url:` 和 provider 的 `health-check.url` 里（内核测节点用）。
 - **rule-provider（`RULE-SET`）的下载走内核自己的路由**，跟 geodata 不一样：实测把节点全设成死的
   时，日志是 `dial 节点选择 (match Match/) mihomo --> testingcf.jsdelivr.net:443 … connection
   refused`，provider 没下来、`RULE-SET` **静默失效**，而 `mihomo -t` 照样 `test is successful`
@@ -576,4 +595,4 @@ networksetup 还会让人以为工具动了系统设置。
 - **只支持一个订阅**是刻意的：多订阅那套（`sub add/list/nodes/rm`、每个组挂哪几个 provider、
   `--prune`/`--sort`/`--limit`）是 1085 行里的绝大部分，而它解决的问题（几十个机场、按延迟
   自动剔节点）是少数人的需求。要多个订阅就去手工写 `config.yaml`——本工具碰到别的 provider
-  不会碰它，只打印一句「本工具只管 `sub`」。
+  不会碰它，只打印一句「本工具只管 `airport`」。

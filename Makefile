@@ -59,7 +59,7 @@ fmt:
 	$(RUFF) check --fix .
 
 check:
-	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-dir）"; exit 1; }
+	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-onefile）"; exit 1; }
 	$(BIN) --help > /dev/null
 	@file $(BIN) | sed 's/^/  /'
 	@ls -lh $(BIN) | awk '{print "  体积: " $$5}'

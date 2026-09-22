@@ -39,7 +39,8 @@ def cmd_status(_: argparse.Namespace) -> int:
     # systemd）非 root 认不出主人，found 会是空的，但端口明明在监听。
     bound = bool(found) or port_bound(port)
 
-    # 连通性探测是这屏里最贵的一步（穿代理发两次请求核对 unified-delay，实测 ~0.6s），
+    # 连通性探测是这屏里最贵的一步（往本地代理端口发请求，内核那边按 rules 路由 +
+    # unified-delay 会复核一次，实测 ~0.6s），
     # 所以先丢到线程里跑，等下面把日志 / 网卡 / 出口都拼完再来收结果——行的顺序不变，
     # 整体从"各步相加"变成"等最慢那一步"。
     # 认不出主人时照样探（只要不是**已知的别人**在听）：不然内核以 root 跑的机器上这行永远不出现。

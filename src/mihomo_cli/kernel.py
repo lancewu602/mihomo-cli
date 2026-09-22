@@ -144,7 +144,11 @@ def current_node() -> tuple[list[str], int | None] | None:
 
 
 def probe(port: int) -> tuple[bool, str]:
-    """真发一个请求走代理，确认链路是通的。返回 (通不通, 说明文字)。"""
+    """真发一个请求走本地代理端口，确认链路是通的。返回 (通不通, 说明文字)。
+
+    **路由由内核的 rules 决定**，不是“必然走代理”：默认的 TEST_URL 在骨架里命中
+    `GEOSITE,cn,DIRECT`（见 core.TEST_URL 那段注释），所以它现在证明的是“这个地址通”。
+    """
     # http/https 都要映射：ProxyHandler 是按 scheme 注册 handler 的，只给 http 的话
     # https 请求会落到默认的直连 handler —— 那探测就根本没走代理
     opener = urllib.request.build_opener(

@@ -26,15 +26,18 @@
 确认端口”那一点（`restart` 仍然只有原生命令，没有暴露成子命令）。
 
 ```
-core → kernel → logs / systemproxy / subs → service → cli
+core → {kernel, config} → logs / systemproxy / subs → service → cli
 ```
 
 - `kernel.py`：启动**之前**的事都不做，只读——进程 / 端口 / 服务状态 / 控制接口 / 出口链路 / `probe` 探测
 - `logs.py`：内核日志去哪了、多大、怎么清
 - `systemproxy.py`：`networksetup` 读写（`proxy_on` / `teardown` / 绕过列表 / 原状态存档）
-- `subs.py`：`sub set|update|show` 与 `reset` —— 一个链接的正反面：set 写 `config.yaml` 的
-  `proxy-providers` 那一块，reset 把它清成最小骨架（见 docs/subscription.md）。写前备份、
-  写后 `mihomo -t` 校验、不过就回滚（reset 不落盘备份，靠内存里那份原文还原）；节点由内核自己拉
+- `subs.py`：`sub set|update|show|nodes|use` 与 `reset` —— 一个链接的正反面：set 写 `config.yaml` 的
+  `proxy-providers` 那一块（以及缺失的骨架），reset 把它清成最小骨架（见 docs/subscription.md）。
+  写前备份、写后 `mihomo -t` 校验、不过就回滚（reset 不落盘备份，靠内存里那份原文还原）；
+  节点由内核自己拉
+- `config.py`：`config` 看现状 / `config mode|log-level|allow-lan <值>` 改它 —— 写盘（同样过
+  `commit_config`）+ 内核在跑就顺手 `PATCH /configs` 当场生效（见 docs/control-api.md）
 - `service.py`：`start|stop` —— 上面那条“薄封装”+ 与系统代理的交界（开/摘代理就发生在这两步里）
 - `nics.py`：`nics` 列表 / `nic` 固定用哪张网卡（选网卡的优先级：显式 > 固定 > 活跃）
 
@@ -43,7 +46,9 @@ core → kernel → logs / systemproxy / subs → service → cli
 **开系统代理之前，内核必须在监听。** 把系统代理指向一个没人监听的端口 = 整机断网。所以：
 
 - `proxy_on()` 先看端口上是不是 mihomo，不是就拒绝，并告诉你先把内核起起来（`mihomo-cli start`）；
-- 开完真发一次探测（穿代理打 `generate_204`），不通就把设置还原回去再退出（返回 1）。
+- 开完真发一次探测（往本地代理端口打 `generate_204`，**路由由 rules 决定**——默认那个地址在
+  骨架里命中 `GEOSITE,cn,DIRECT`，所以它证明的是“这条链路通”；见下面那节），不通就把设置还原
+  回去再退出（返回 1）。
 
 ### 探测不是“一次定生死”：冷启动那十几秒
 
@@ -248,6 +253,7 @@ Linux  root 起的监听，nobody 跑：ss -ltnp → 有那行、但没有 users
   制造的窗口"，但用户手打 `stop` 一样能把机器留在断网状态里——旧实现正是这么留的；
 - `restart` 仍然只有原生命令：`sub set` 需要时会自己重启，暴露出来只是多一个要解释的入口。
 - 删掉的命令一律**不给指路提示**（早先有个 `REMOVED` 表会回一句“改叫 xxx”，现在敲 `proxy` /
-  `kernel` / `restart` / `sub add` 就是 argparse 的 invalid choice）：本工具不背旧版本兼容。
+  `kernel` / `restart` / `sub add`，或者试过又删的 `rule` / `config default`，就是 argparse 的
+  invalid choice）：本工具不背旧版本兼容。
 
 留一条经验：**新增"会动系统状态"的能力前，先问它是不是服务管理器/系统本身已经做好的事。**

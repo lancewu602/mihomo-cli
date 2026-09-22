@@ -24,29 +24,30 @@
 
 安全上两条硬要求：**绑 `127.0.0.1`**（这接口等于内核的 root，绝不能对外），以及配 `secret`
 （之后每个请求都要带 `Authorization: Bearer <secret>`）。这个工具会自动带 token
-（`src/mihomo_cli/core.py:320` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
+（`src/mihomo_cli/core.py:331` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
 
 ## 本项目用了哪些端点
 
 出口就三个封装：
 
-- `src/mihomo_cli/core.py:320` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
+- `src/mihomo_cli/core.py:331` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
   必须保留状态码：有些接口失败内核回 `4xx` 加一句 message，跟“内核没起来”（`0`）不是一回事。
-- `src/mihomo_cli/core.py:347` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
+- `src/mihomo_cli/core.py:358` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
   降级约定：status 在内核没起来时不崩，只显示“读不到”。
-- `src/mihomo_cli/core.py:353` **`controller_put(path, timeout)`** → 发一个 PUT，只回状态码（连不上给 `0`）。
-  它是唯一会改运行中内核状态的通道，目前只有 `sub update` 用。
+- `src/mihomo_cli/core.py:364` **`controller_put(path, timeout)`** → 发一个 PUT，只回状态码（连不上给 `0`）。
+  它是唯一会改运行中内核状态的 PUT 封装，目前只有 `sub update`（和 `sub set` 碰到“链接没变”
+  时）走它；其余两个写口（`PUT /proxies/{组}`、`PATCH /configs`）直接调 `api_raw()`。
 
 读接口用在哪：
 
 | 代码位置 | 调用 | 干什么 |
 |---|---|---|
-| `src/mihomo_cli/status.py:129` | `GET /version` | 判断控制接口可用 |
+| `src/mihomo_cli/status.py:130` | `GET /version` | 判断控制接口可用 |
 | `src/mihomo_cli/kernel.py:65` / `:87` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
 | `src/mihomo_cli/kernel.py:113` / `:103` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
-| `src/mihomo_cli/subs.py:802` / `:805` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+| `src/mihomo_cli/subs.py:851` / `:858` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
 
-写接口两个：`src/mihomo_cli/subs.py:837` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+写接口两个：`src/mihomo_cli/subs.py:891` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
 以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`；
 以及 `src/mihomo_cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
 

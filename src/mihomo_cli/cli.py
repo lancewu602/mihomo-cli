@@ -14,9 +14,10 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
     nic [网卡名]       固定系统代理用哪张网卡（仅 macOS）；不固定就跟着活跃网卡走
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     sub   set|update|show   订阅：只支持一个链接，节点由内核自己拉
-    config [mode|log-level]  全局设置：看现状，或者改 mode / log-level（写 config.yaml + 内核当场生效）
+    config [mode|log-level|allow-lan]
+                      全局设置：看现状，或者改 mode / log-level / allow-lan（写 config.yaml
+                      + 内核当场生效，不用重启）
     reset [--hard]    清空配置：config.yaml 清成最小骨架（顶部注释 + mixed-port）
-    nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     status            内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性
     logs   [--truncate]  内核日志在哪、多大；--truncate 清空
 
@@ -25,9 +26,10 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
 config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--hard 连备份一起删）。规则 / geodata /
 策略组不做：那是手工活，或者用 mihomo 自带的控制面板。
 
-全局设置只做两项：`config mode`（rule / global / direct）与 `config log-level`
-（silent / error / warning / info / debug）。这两个值域封闭、内核的 `PATCH /configs` 也支持，
-所以落盘之后能让运行中的内核当场生效（不用断一下代理）；其余全局项一律不碰。
+全局设置只做三项：`config mode`（rule / global / direct）、`config log-level`
+（silent / error / warning / info / debug）和 `config allow-lan`（true / false）。这三项值域封闭、
+内核的 `PATCH /configs` 也支持，所以落盘之后能让运行中的内核当场生效（不用断一下代理）；
+其余全局项一律不碰。
 
 启停内核只是替你把 `brew services` / `systemctl` 那两条命令打出来，常驻与开机自启仍归服务
 管理器；**本工具不自己 fork mihomo**。
@@ -38,7 +40,8 @@ config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--har
 内核配置目录自动探测 ~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo…（MIHOMO_DIR 可覆盖）。
 零第三方依赖，只用标准库；内核由 brew services / systemd 常驻，本工具不自己 fork 进程。
 
-改代码前先看 docs/：control-api.md（控制接口）、packaging.md（构建二进制与安装）。
+改代码前先看 docs/README.md（索引）：control-api.md（控制接口）、subscription.md（订阅）、
+lifecycle.md（生命周期）、packaging.md（构建二进制与安装）。
 """
 
 from __future__ import annotations
@@ -82,8 +85,9 @@ if not IS_MACOS:
     for _name in MACOS_ONLY:
         SUBCOMMANDS.pop(_name, None)
 
-# 已经删掉的命令不再给指路：敲 `proxy` / `kernel` / `restart` / `sub add` 就是 argparse 的
-# invalid choice。本工具不背旧版本兼容（旧配置里的 `sub:` 也不会被认成本工具的订阅）。
+# 已经删掉的命令不再给指路：敲 `proxy` / `kernel` / `restart` / `sub add`，或者试过又删掉的
+# `rule` / `config default`，都是 argparse 的 invalid choice。本工具不背旧版本兼容
+# （旧配置里的 `sub:` 也不会被认成本工具的订阅）。
 # sub set 要 mihomo：写完配置靠 `mihomo -t` 校验。show 是纯读；update 走控制接口或
 # 服务管理器，两者都用不到这个可执行文件，没装内核也该能用。config 同理：不带子命令（看
 # 现状）只读配置 + 问一下控制接口，带了子命令才写盘、才要 `mihomo -t`。
@@ -106,7 +110,7 @@ def _needs_kernel(args: argparse.Namespace) -> bool:
         return False
     if args.action == "sub":
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL
-    if args.action == "config":  # 看现状是纯读；只有两个 setter 写盘
+    if args.action == "config":  # 看现状是纯读；只有三个 setter 写盘
         return getattr(args, "config_action", None) is not None
     return True
 

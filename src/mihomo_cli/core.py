@@ -101,7 +101,18 @@ def discover_tool_dir() -> Path:
 TOOL_DIR = discover_tool_dir()
 STATE_FILE = TOOL_DIR / "state.json"  # macOS 系统代理的原状态，stop 时还原成它
 # 连通性/测速目标。默认 https：内核的 unified-delay 要发两次请求核对，http 下容易只拿到第一次
-# （日志里会报 "failed to get the second response"），并且会提示改用 HTTPS
+# （日志里会报 "failed to get the second response"），并且会提示改用 HTTPS。
+#
+# 一个 URL 两个用途，路由方式完全不同：
+#   · 本工具的连通性探测（kernel.probe / systemproxy.probe_until_ok）——请求打到本地代理端口，
+#     **路由由内核的 rules 决定**；
+#   · 骨架里 url-test 组的 `url:` 与 provider 的 `health-check.url`——内核测节点用的。
+# 所以第一个用处有个坑：`www.gstatic.com` 在 Loyalsoldier 那份 geosite.dat 里属于 `cn`，而骨架里
+# `GEOSITE,cn,DIRECT` 排在前面——探测实际打的是**直连**（实测日志 `match GeoSite(cn) using
+# DIRECT`；换成 MetaCubeX 那份数据时它属于 `gfw`、走的是 `节点选择`，所以以前确实是走代理的）。
+# 探通了只说明这条链路通，不说明代理通。想让探测真去测代理，换成骨架会送进代理的地址
+# （实测 `https://www.google.com/generate_204` 命中 `GeoSite(gfw)` → 节点选择，204 in 1.9s），
+# 或者临时用 MIHOMO_TEST_URL 覆盖。
 TEST_URL = os.environ.get("MIHOMO_TEST_URL", "https://www.gstatic.com/generate_204")
 PROBE_TIMEOUT = 4.0  # 探测超时（秒）
 
@@ -365,9 +376,10 @@ def controller_put(path: str, timeout: float = 30) -> int:
         return 0
 
 
-# ────────────────── config.yaml 的写（只有 sub 用）──────────────────
+# ────────────────── config.yaml 的写（sub 与 config 用）──────────────────
 #
-# 全工具只有 sub set 会改内核的配置文件，规矩两条：写前必须备份、写后必须 mihomo -t 校验。
+# 全工具只有 `sub set`（订阅块 + 缺失的骨架）和 `config`（三项全局设置）会改内核的配置文件，
+# 规矩两条：写前必须备份、写后必须 mihomo -t 校验。
 # 各子命令自己按行改文本，不引 YAML 库——PyYAML 重 dump 会把整份配置的注释和排版全丢掉。
 
 

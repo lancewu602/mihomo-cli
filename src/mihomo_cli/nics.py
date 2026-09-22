@@ -214,7 +214,7 @@ def cmd_nic(args: argparse.Namespace) -> int:
         print(f"{ok('✓')} 已固定用 {svc['name']}{where}")
         if not svc["enabled"]:
             print(
-                warn("⚠ 它现在是停用状态：先在「系统设置 → 网络」里启用，否则 start 会拒绍开代理")
+                warn("⚠ 它现在是停用状态：先在「系统设置 → 网络」里启用，否则 start 会拒绝开代理")
             )
         print(dim(f"  写进 {NIC_FILE}；解除固定：mihomo-cli nic --reset"))
         return 0
