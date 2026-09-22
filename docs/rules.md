@@ -98,6 +98,9 @@ rules:
 - **已经是本工具的骨架**：如果三个文件里的内容变了，就刷新块；没变则一个字节不改（幂等）。
 - **你自己写过规则**（`rules` 不再是骨架形状）：`sub set` 一个字节不碰，只打一句
   「你自己写了 N 条规则」→ 这种配置要同步自定义规则，用**显式**的 `rule apply`（它只改块内）。
+  唯一例外：`rules` 里**只剩一条** `MATCH,DIRECT`（或 `MATCH,节点选择`）时，那被当成 v1 老骨架，
+  六条骨架规则会被补进去（`subs.py` 开头 `LEGACY_SPLIT_RULES` 那套升级路径；这也是“绝不改兜底
+  那条 MATCH”的例外之一——动的是它前面，不是它本身）。
 - 末尾那条 `MATCH` **任何情况下都不动**：它决定走不走代理（黑名单 / 白名单），替你改它就是改
   分流行为。想换模式自己改那一行。
 
@@ -112,7 +115,7 @@ $ mihomo-cli rule check www.google.com
 
 $ mihomo-cli rule check baidu.com tracker.net example.org
     baidu.com                    直连   ← GEOSITE,cn,DIRECT（config.yaml 第 45 行）
-    tracker.net                  拒绝   ← DOMAIN-SUFFIX,tracker.net,REJECT（第 41 行，自定义规则）
+    tracker.net                  拒绝   ← DOMAIN-SUFFIX,tracker.net,REJECT（config.yaml 第 41 行，自定义规则）
     example.org                  直连   ← MATCH,DIRECT（第 49 行）
 ```
 
@@ -136,17 +139,19 @@ $ mihomo-cli rule check baidu.com tracker.net example.org
 内核在跑时还会多打一行「现在内核的出口」（那条实际链路），方便对照：规则说走代理，当前选中的
 是哪个节点一目了然。
 
-§️ 这一层的可信度是**拿内核对照过**的：沙箱里真起一份内核，48 个域名（覆盖六类骨架 + 自定义 +
-兵底 + 几个故意构造的边界名）逐个比对日志里的 `match GeoSite(gfw)` / `DomainSuffix(x)`，
+⚠️ 这一层的可信度是**拿内核对照过**的：沙箱里真起一份内核，48 个域名（覆盖六类骨架 + 自定义 +
+兜底 + 几个故意构造的边界名）逐个比对日志里的 `match GeoSite(gfw)` / `DomainSuffix(x)`，
 **48/48 一致**。顺带测出两件事：
 
 - **`.dat` 里的类别名是大写的**（`CN` / `GFW` / `CATEGORY-AI-!CN`，1547 个类别里一个小写的
   都没有），配置里写的是小写——所以两边比的是小写形式；
-- 骨架用到的那三个类别的条目**全是 `Domain` 型**（后缀语义）：`gfw` 4,365 条、
-  `category-ads-all` 190,384 条、`cn` 110,616 条（另有 553 条 `Full`、8 条 `Regex`）。
-  `Full`（精确）/`Regex`（正则）/`Plain`（子串）这三种语义代码里都实现了，只是这几类没用到。
+- 骨架那三个类别里**绝大多数条目是 `Domain` 型**（后缀语义）：`gfw` 4,365 条、
+  `category-ads-all` 190,384 条、`cn` 110,616 条 `Domain` + 553 条 `Full` + 8 条 `Regex`
+  （合计 111,177，跟 `subscription.md` 对得上）。`Plain`（子串）在这三个类别里一条都没有——
+  所以那次对照只覆盖了 `Domain` / `Full` 两种语义；`Plain` / `Regex` 按 v2ray 定义实现，
+  **没有被那次实测覆盖**（`geosite.py` 的 docstring 里也是这么标的）。
 
-`rules` 一节要是干脆不存在，它会直说：内核的隐式兵底是直连（实测：没写 `MATCH` 时未命中就直连）。
+`rules` 一节要是干脆不存在，它会直说：内核的隐式兜底是直连（实测：没写 `MATCH` 时未命中就直连）。
 
 ## 踩过的点
 
@@ -159,8 +164,10 @@ $ mihomo-cli rule check baidu.com tracker.net example.org
 - **`proxy` 类的目标是骨架里那个主组 `节点选择`。** 如果 `config.yaml` 里没有这个组，
   `mihomo -t` 会直接报错（实测：`rules[0] [...] error: proxy [不存在的组] not found`）→ 校验失败
   → 自动回滚。所以 `rule apply` 会先检查一句，提示你改目标或建组。
-- **`rules` 是流式写法（`rules: [{…}]`）时**：`rule apply` 直接报错不猜（按行改的活干不了）；
-  `sub set` 只提示一句、**不中断**——订阅那一块该写的还得写。
+- **`rules` 是流式写法（`rules: [{…}]`）时**：`rule apply` 与 `sub set` 都会当场报错退出
+  （`_ensure_rules()` 在 rules 为空/流式时本来就 `die`，`_apply_custom_rules()` 里那条只警告的
+  分支只在一个极端写法（`rules:` 头行有内容、节里又有 `- ` 行）下才走得到）。谁都没写盘，
+  `config.yaml` 一个字节没动；把 rules 改成块状再跑就好。
 - **同一个域名放两类**：按 `direct → proxy → reject` 的顺序先命中（`KINDS` 的顺序就是生成顺序）。
 - **块内手改会被覆盖**：这是有意的。要改内容就改文件，或者干脆不用这套、直接手写 `rules`。
 

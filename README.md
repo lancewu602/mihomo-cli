@@ -137,9 +137,9 @@ allow-lan），改 `config.yaml` 的东西（手写规则、geodata、策略组�
   固定的那张网卡，单独一个文件）、`rules/`（自定义分流规则的三个文件）、`backups/`（写配置前的备份，
   留最近 5 份；`reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
-  也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，写它的只有三处——`sub set`、
-  `rule apply` 和 `config`（那三项全局设置）。`sub set` 只动 `proxy-providers` 里的 `airport`、
-  引用它的组，
+  也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，写它的只有四处——`sub set`、
+  `rule apply`、`config`（那三项全局设置）和 `reset`。`sub set` 只动 `proxy-providers` 里的
+  `airport`、引用它的组，
   以及**缺失时才补**的那几条（分流规则、兜底 MATCH、那几项全局设置）；你已经写过的组、规则、
   设置一律不碰——全局设置里已有的**顶层键**不动，`geox-url` / `profile` 这种嵌套节则是
   **缺哪个子键补哪个**（升级前只写了 `geox-url.geosite` 的配置，会在下次写配置时补上

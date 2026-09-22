@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 from .core import (
+    GROUP_NAME,
     HOST,
     IS_MACOS,
     PROBE_TIMEOUT,
@@ -117,7 +118,7 @@ def current_node() -> tuple[list[str], int | None] | None:
         return None
     proxies = data.get("proxies", {})
 
-    for start in ("节点选择", "GLOBAL"):
+    for start in (GROUP_NAME, "GLOBAL"):
         if start not in proxies or not proxies[start].get("now"):
             continue
         chain, seen, cur = [start], {start}, start

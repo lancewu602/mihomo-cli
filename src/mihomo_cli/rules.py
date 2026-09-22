@@ -31,14 +31,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .core import TOOL_DIR, die
+from .core import GROUP_NAME, TOOL_DIR, die
 
 RULES_DIR = TOOL_DIR / "rules"  # 三个文件就住这儿，手改也认（只收域名）
 FILE_EXT = ".list"  # 文件名 = 类名 + .list（手改时一眼能看出这是列表文件）
 KINDS = ("direct", "proxy", "reject")  # 顺序就是生成时的顺序、也是 `rule ls` 的顺序
 TARGETS = {
     "direct": "DIRECT",
-    "proxy": "节点选择",  # 骨架里那个主组（subs.GROUP_NAME）
+    "proxy": GROUP_NAME,  # 骨架里那个主组（常量在 core，跟 subs / kernel 共用）
     "reject": "REJECT",
 }
 MARK_BEGIN = "# >>> mihomo-cli 自定义规则（这个标记块由工具维护，手改会在下次 rule apply 时被覆盖）"
@@ -70,7 +70,7 @@ def normalize(raw: str) -> tuple[str | None, str]:
     带 `*.` 通配、大小写不一，都归一成同一个域名——`DOMAIN-SUFFIX` 本来就覆盖子域，
     所以 `*.` 和裸域名等价。
     """
-    s = raw.strip().strip("\u3000").split()[0] if raw.strip() else ""
+    s = raw.strip().split()[0] if raw.strip() else ""
     if not s:
         return None, "空的"
     if not s.isascii():
@@ -164,20 +164,29 @@ def add(kind: str, items: list[str]) -> tuple[list[str], list[str], list[tuple[s
 
 
 def remove(kind: str, items: list[str]) -> tuple[list[str], list[str]]:
-    """删域名。返回 (删掉的, 文件里本来就没有的)。注释与空行原样留着。"""
+    """删域名。返回 (删掉的, 文件里本来就没有的)。注释与空行原样留着。
+
+    比对拿**归一化后**的域名：文件里手写成 `Example.COM` / `*.example.com` 也要删得掉
+    （只跟原始行字符串比会「报告删了、其实一行没动」——手改过的文件里这两种写法都合法）。"""
+    have = set(read(kind))
     gone: list[str] = []
     absent: list[str] = []
     for raw in items:
         domain, _why = normalize(raw)
         if domain is None:
-            absent.append(raw.strip())  # 认不出来的东西不可能在文件里（生成时就过了一遍）
-            continue
-        (gone if domain in set(read(kind)) else absent).append(domain)
+            absent.append(raw.strip())  # 认不出来的东西不可能在文件里（读的时候就不算规则）
+        elif domain in have:
+            gone.append(domain)
+        else:
+            absent.append(domain)
     if gone:
+        drop = set(gone)
         keep = [
             line
             for line in _raw_lines(kind)
-            if not (line.strip() and not line.lstrip().startswith("#") and line.strip() in set(gone))
+            if not (
+                line.strip() and not line.lstrip().startswith("#") and normalize(line)[0] in drop
+            )
         ]
         write(kind, keep)
     return gone, absent

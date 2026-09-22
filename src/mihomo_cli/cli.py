@@ -102,12 +102,14 @@ if not IS_MACOS:
         SUBCOMMANDS.pop(_name, None)
 
 # 已经删掉的命令不再给指路：敲 `proxy` / `kernel` / `restart` / `sub add`，或者试过又删掉的
-# `rule` / `config default`，都是 argparse 的 invalid choice。本工具不背旧版本兼容
+# `config default`，都是 argparse 的 invalid choice。本工具不背旧版本兼容
 # （旧配置里的 `sub:` 也不会被认成本工具的订阅）。
+# （`rule` 不在此列：那个名字早先试过一版“本地规则集”又删掉了，现在的 `rule` 是另一套设计——
+# 三个域名列表文件 + 写进 rules 的标记块，见 docs/rules.md。）
 # sub set 要 mihomo：写完配置靠 `mihomo -t` 校验。show 是纯读；update 走控制接口或
 # 服务管理器，两者都用不到这个可执行文件，没装内核也该能用。config 同理：不带子命令（看
 # 现状）只读配置 + 问一下控制接口，带了子命令才写盘、才要 `mihomo -t`。rule 也一样：
-# add / ls / rm / clear 只动工具目录里的三个文件，只有 apply 写 config.yaml、才要 `-t`。
+# add / ls / rm / clear / check 只动（或只读）工具目录与配置，只有 apply 写 config.yaml、才要 `-t`。
 SUB_NEEDS_KERNEL = {"set"}
 RULE_NEEDS_KERNEL = {"apply"}
 

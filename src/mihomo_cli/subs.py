@@ -28,6 +28,7 @@ from . import geosite, rules
 from .core import (
     BACKUP_DIR,
     FALLBACK_PORT,
+    GROUP_NAME,
     MIHOMO_DIR,
     RESTART_HINT,
     TEST_URL,
@@ -65,11 +66,9 @@ SUB_MAX_BYTES = 16 * 1024 * 1024  # 预探测的读取上限，防呆
 # 卡不住反斜杠转义：这个值写进配置时是 YAML 双引号串，`\d` 会被当成非法转义——要加就改用单引号写法。
 SUB_EXCLUDE = r"(?i)公告|网站地址|剩余流量|过期时间"
 
-GROUP_NAME = (
-    "节点选择"  # 主组（select）：手动选节点的地方。这个名字跟 kernel.current_node() 认的名字
-)
-# 一致，所以建完 status 的「当前出口」立刻就能穿透到订阅节点上
 AUTO_GROUP_NAME = "自动选择"  # 副组（url-test）：自己按延迟挑最快的节点，手册里也叫这个名字
+# 主组（select，GROUP_NAME）从 core 引：subs 建它、kernel.current_node() 认它、
+# rules.TARGETS["proxy"] 指向它——三处共用同一个常量，免得改一处忘另两处
 GROUP_URL_INTERVAL = 300  # url-test 的测速间隔（秒），跟 provider 的 health-check 保持一致
 GROUP_TOLERANCE = 50  # url-test 的切换容差（ms）：比当前最快的慢这么多才换，免得来回跳
 
@@ -591,7 +590,8 @@ def _ensure_group(lines: list[str]) -> list[str]:
 
     只在「没有任何组引用 sub」时才动这一节，动法按危害从小到大：
       1. 已有同名组（节点选择）→ 只补 use:，别的字段一个不碰
-      2. 没有这个组 → 新建一个，并补 MATCH 规则（已有 MATCH 规则指向别的组时不抢，
+      2. 没有这个组 → 新建一个（规则不在这里补，那是 `_ensure_rules()` 的活：“组建好了但规则
+         还是旧版那条兜底 MATCH”的配置也得能补上分流规则；已有 MATCH 指向别的组也不抢，
          只提示一句——偷偷改用户的规则比不改更糟）
     """
     groups = _groups(lines)
@@ -708,16 +708,27 @@ def _custom_block_span(lines: list[str]) -> tuple[int, int] | None:
     """自定义规则那段标记块占的行区间 [起, 止)。没找到开始标记给 None。
 
     只认标记本身，不认内容：块里写了什么、几条、是不是被手改过，都无所谓——
-    反正 apply 是整块重写（或整块删掉）。"""
-    begin = next((i for i, line in enumerate(lines) if rules.MARK_BEGIN in line), None)
+    反正 apply 是整块重写（或整块删掉）。两条边界规矩：
+
+      · **只在 `rules:` 节里找标记**。别处出现同样文字（比如把文档里的示例块粘到文件顶部
+        当笔记）不算，否则 apply 会从那里一直吃到 rules 节末尾。
+      · **结束标记被手删了时**，只吃「开始标记 + 紧接着、形态就是我们生成的那种
+        `- DOMAIN-SUFFIX,…`」那几行。绝不吃到骨架规则或末尾那条 MATCH——那两样一个字节
+        都不该动。（旧实现直接吃到 rules 节末尾，实测会把六条骨架和 MATCH 一起卷走。）
+    """
+    span = _section_span(lines, "rules")
+    if span is None:
+        return None
+    begin = next((i for i in range(span[0] + 1, span[1]) if rules.MARK_BEGIN in lines[i]), None)
     if begin is None:
         return None
-    end = next((i for i in range(begin + 1, len(lines)) if rules.MARK_END in lines[i]), None)
-    if end is None:
-        # 只有开始标记、结束标记被手删了：到 rules 节末尾为止，别把后面的规则一起吃掉
-        span = _section_span(lines, "rules")
-        end = (span[1] - 1) if span else begin
-    return begin, end + 1
+    end = next((i for i in range(begin + 1, span[1]) if rules.MARK_END in lines[i]), None)
+    if end is not None:
+        return begin, end + 1
+    end = begin + 1
+    while end < span[1] and re.match(r"^\s*-\s*DOMAIN-SUFFIX,", lines[end], re.I):
+        end += 1
+    return begin, end
 
 
 def _custom_block_state(lines: list[str]) -> tuple[bool, bool]:
@@ -769,7 +780,7 @@ def _apply_custom_rules(lines: list[str]) -> str | None:
         )
 
     if span is None:  # 连 rules 节都没有：建一节（顺带补一条兜底，否则读起来像漏了东西）
-        lines.extend(["\n", "rules:\n", *block, f"  - MATCH,{SKELETON_MATCH}\n"])
+        _new_section(lines, "rules:", [*block, f"  - MATCH,{SKELETON_MATCH}\n"])  # 复用建节那套
         return dim(f"规则      新建 rules 节 + 自定义规则（{rules.describe()}）+ MATCH,{SKELETON_MATCH}")
 
     at = rows[0] if rows else _content_end(lines, span[0], span[1])
@@ -1200,7 +1211,7 @@ def cmd_sub(args: argparse.Namespace) -> int:
 
 def _display_name(s: str) -> str:
     """节点名里的控制字符（实测有家机场在名字里塞了个制表符）换成空格再显示：
-    制表符的显示宽度跟它占据的列数对不上，表格会直接被擑歪。"""
+    制表符的显示宽度跟它占据的列数对不上，表格会直接被撑歪。"""
     return re.sub(r"[\x00-\x1f\x7f]", " ", s).strip()
 
 
@@ -1458,9 +1469,9 @@ def cmd_reset(args: argparse.Namespace) -> int:
 # ─────────────────────── rule：自定义分流规则 ───────────────────────
 #
 # 三个文件（direct / proxy / reject）住在工具目录里，内容只有域名（为什么要这么存见 rules.py
-# 开头那四条）。命令面五个动作：add / ls / rm / apply / clear。**只有 apply 改 config.yaml**
-# （而且只改标记块那几行），其余四个只动工具目录里的文件——所以它们连内核都不用装
-# （见 cli._needs_kernel）。
+# 开头那四条）。命令面六个动作：add / ls / rm / apply / clear / check。**只有 apply 改
+# config.yaml**（而且只改标记块那几行），其余五个只动 / 只读工具目录与配置文件（check 只读）
+# ——它们连内核都不用装（见 cli._needs_kernel）。
 
 
 def cmd_rule(args: argparse.Namespace) -> int:
@@ -1574,7 +1585,7 @@ def _rule_clear(args: argparse.Namespace) -> int:
         print(dim("  本来就都是空的"))
         return 0
     print(f"{ok('✓')} 清空了 {'、'.join(hit)}  {dim(rules.files_hint())}")
-    print(dim("  config.yaml 里那段要 rule apply 才会跟着清掉（留空文件不会自己生效）"))
+    print(dim("  config.yaml 里那段还在（文件已删）：rule apply 把那段也拿掉"))
     return 0
 
 
@@ -1712,7 +1723,7 @@ def _rule_check(args: argparse.Namespace) -> int:
     block = _custom_block_rows(lines)
     chain = current_node() if api("/version") else None
     print(dim(f"规则来源  {cfg}"))
-    if geo is None:
+    if cats and geo is None:
         print(warn(f"⚠ GEOSITE 类的规则判不了：{geo_err or '没读到数据文件'}"))
 
     for raw in args.domain:

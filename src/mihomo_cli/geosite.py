@@ -7,14 +7,18 @@
     Domain      { Type type = 1; string value = 2; repeated string attribute = 3 }
     Type        { Plain = 0; Regex = 1; Domain = 2; Full = 3 }
 
-只用到两件事：按 wire 类型切字段、按 varint 读长度（所以不需要 protobuf 库）。匹配语义跟内核
-对齐（这一层是**实测对照**过的：拿沙箱内核真跑一遍，把日志里的 `match GeoSite(xxx)` 跟这里的
-判定逐条比过）：
+只用到两件事：按 wire 类型切字段、按 varint 读长度（所以不需要 protobuf 库）。匹配语义按 v2ray 的
+定义实现，跟内核对齐到哪种程度是分开说的（避免把没验过的当验过了）：
 
-    Full   `full:x.com`    → domain == x.com
-    Domain `domain:x.com`  → domain == x.com 或 *.x.com
-    Plain  `x.com`         → 子串命中（v2ray 里 plain 就是子串，不是后缀）
-    Regex  `regexp:^x`     → 正则
+    Full   `full:x.com`    → domain == x.com          ← 跟内核逐条对照过
+    Domain `domain:x.com`  → domain == x.com 或 *.x.com  ← 跟内核逐条对照过（骨架那几类全是这种）
+    Plain  `x.com`         → 子串命中（v2ray 里 plain 就是子串，不是后缀）  ← 按定义实现，未覆盖
+    Regex  `regexp:^x`     → 正则（大小写敏感，大小写由正则自己管）      ← 按定义实现，未覆盖
+
+“对照过”的意思是：真起一份内核，48 个域名逐个比它日志里的 `match GeoSite(xxx)`，48/48 一致。
+骨架用到的 `cn` / `gfw` / `category-ads-all` 里**一条 Plain / Regex 都没有**（只有 Domain，`cn`
+另有些 Full），所以后两种语义没被那次对照覆盖——用到它们（别的类别、或手写规则）时请自己拿
+`rule check` 跟内核日志比一下。
 
 类别名带 `@` 的（`steam@cn` 这种）按「基础类别 + attribute 过滤」处理：只匹配带该 attribute
 的条目。文件只在**内核目录**里（`GeoSite.dat`，内核自己下的那份），工具不下载也不改它。
@@ -71,6 +75,8 @@ def _fields(buf: bytes):
             yield field, wire, value
         elif wire == 2:
             length, i = _varint(buf, i)
+            if i + length > size:  # 截断的文件：宁可报错，也别静默产出一段短 payload
+                raise GeoSiteError(f"字段长度 {length} 超出剩余 {size - i} 字节（文件截断了？）")
             yield field, wire, buf[i : i + length]
             i += length
         elif wire == 5:
@@ -142,17 +148,19 @@ class GeoSite:
 
     @staticmethod
     def _parse_domain(payload: bytes) -> tuple[int, str, tuple[str, ...]]:
-        kind, text, attrs = PLAIN, "", ()
-        attr_list: list[str] = []
+        kind, text, attr_list = PLAIN, "", []
         for field, wire, value in _fields(payload):
             if field == 1 and wire == 0:
                 kind = int(value)
             elif field == 2 and wire == 2:
-                text = value.decode("utf-8", "replace").lower()
+                text = value.decode("utf-8", "replace")
             elif field == 3 and wire == 2:  # attribute（mihomo 的扩展）
                 attr_list.append(value.decode("utf-8", "replace"))
-        attrs = tuple(attr_list)
-        return kind, text, attrs
+        # 归一化放在最后做：kind 可能在 value 之后才读到（字段顺序不保证），
+        # 而 Regex 要保留原大小写——它是正则本体，lower 会改写语义（跟内核不一致）。
+        if kind != REGEX:
+            text = text.lower()
+        return kind, text, tuple(attr_list)
 
     def has(self, category: str) -> bool:
         """配置里引用的类别在文件里有没有（没有就是拼错了，或者数据文件换过源）。"""

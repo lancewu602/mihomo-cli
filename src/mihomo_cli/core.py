@@ -24,6 +24,13 @@ from typing import NoReturn
 HOST = "127.0.0.1"  # 代理监听地址
 FALLBACK_PORT = 7890  # 配置文件读不到时的兜底端口
 
+# 骨架里那个主组（select）的名字。三处必须一致，所以放地基这里：
+#   · subs 建它（`sub set` 写骨架时新建的组就叫这个）、
+#   · kernel.current_node() 认它（从它开始穿透嵌套组）、
+#   · rules.TARGETS["proxy"] 指向它（自定义规则的「走代理」就是送进这个组）。
+# 以前这三处各写了一遍字面量，改一处忘另两处就会静默错位。
+GROUP_NAME = "节点选择"
+
 # 系统代理开关靠 networksetup，只有 macOS 有；Linux 上内核服务走 systemd。
 IS_MACOS = sys.platform == "darwin"
 
@@ -376,10 +383,10 @@ def controller_put(path: str, timeout: float = 30) -> int:
         return 0
 
 
-# ────────────────── config.yaml 的写（sub 与 config 用）──────────────────
+# ────────────────── config.yaml 的写（sub / rule / config / reset 用）──────────────────
 #
-# 全工具只有 `sub set`（订阅块 + 缺失的骨架）和 `config`（三项全局设置）会改内核的配置文件，
-# 规矩两条：写前必须备份、写后必须 mihomo -t 校验。
+# 会改内核配置文件的有四处：`sub set`（订阅块 + 缺失的骨架）、`rule apply`（自定义规则那段标记块）、
+# `config`（三项全局设置）、`reset`（清成最小骨架）。规矩两条：写前必须备份、写后必须 mihomo -t 校验。
 # 各子命令自己按行改文本，不引 YAML 库——PyYAML 重 dump 会把整份配置的注释和排版全丢掉。
 
 
@@ -473,9 +480,24 @@ def _restore(cfg: Path, original: str | None, bak: Path | None) -> None:
     """把 config 还原成写之前的样子：优先用内存里那份（reset 没落盘备份），否则拷回备份。"""
     with contextlib.suppress(OSError):
         if original is not None:
-            cfg.write_text(original, encoding="utf-8", newline="\n")
+            _write_config(cfg, original)
         elif bak is not None:
             shutil.copy2(bak, cfg)
+
+
+def _write_config(cfg: Path, text: str) -> None:
+    """写配置文件，强制 LF 换行。
+
+    不用 `Path.write_text(text, newline="\n")`：那个 `newline` 参数是 **Python 3.10 才加的**，
+    而本包声明支持 >=3.9（实测 3.9.6：`TypeError: write_text() got an unexpected keyword
+    argument 'newline'`，而且 write_text 抛的是 TypeError、不会被 `except OSError` 兜住——
+    在 3.9 上等于每条写盘路径都崩）。`Path.open()` 的 newline 从 3.3 就有，行为一样。
+
+    为什么要显式指定：`newline="\n"` 保证写出来的就是 LF（Windows 上不会变成 CRLF），
+    这样“写回去跟原来一样”是可验证的字节级结论。
+    """
+    with cfg.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
 
 
 def commit_config(cfg: Path, lines: list[str], doing: str, backup: bool = True) -> bool:
@@ -495,7 +517,7 @@ def commit_config(cfg: Path, lines: list[str], doing: str, backup: bool = True) 
     if bak is not None:
         print(f"{ok('✓')} 已备份  {dim(str(bak))}")
     try:
-        cfg.write_text("".join(lines), encoding="utf-8", newline="\n")
+        _write_config(cfg, "".join(lines))
     except OSError as e:
         # 配置目录属主是 root 的机器上很常见（sudo brew services / 官方 deb），给一句人话
         _restore(cfg, original, bak)
