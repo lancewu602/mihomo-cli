@@ -24,10 +24,11 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
-from . import rules
+from . import geosite, rules
 from .core import (
     BACKUP_DIR,
     FALLBACK_PORT,
+    MIHOMO_DIR,
     RESTART_HINT,
     TEST_URL,
     api,
@@ -1471,6 +1472,7 @@ def cmd_rule(args: argparse.Namespace) -> int:
         "rm": _rule_rm,
         "apply": _rule_apply,
         "clear": _rule_clear,
+        "check": _rule_check,
     }[action](args)
 
 
@@ -1562,6 +1564,172 @@ def _rule_clear(args: argparse.Namespace) -> int:
         return 0
     print(f"{ok('✓')} 清空了 {'、'.join(hit)}  {dim(rules.files_hint())}")
     print(dim("  config.yaml 里那段要 rule apply 才会跟着清掉（留空文件不会自己生效）"))
+    return 0
+
+
+# ────────────────── rule check：这个域名会被哪条规则接住 ──────────────────
+#
+# 内核的控制接口**没有**“拿个域名问走哪条规则”的端点，所以这块是工具自己在本地算的：按顺序走
+# 一遍 config.yaml 里的 rules（首次匹配即生效），把域名类规则和 GEOSITE 判完。GEOSITE 要读内核
+# 目录里那份 GeoSite.dat（见 geosite.py）；看不了的规则（GEOIP / IP-CIDR / RULE-SET /
+# PROCESS-NAME…）会明确报出来——它们要是排在命中那条前面，结论就不敢说满。
+
+# 能在本地判定的域名类规则：值 → 判定函数（域名先小写，跟内核一样）
+DOMAIN_RULES = {
+    "DOMAIN": lambda v, d: d == v,
+    "DOMAIN-SUFFIX": lambda v, d: d == v or d.endswith("." + v),
+    "DOMAIN-KEYWORD": lambda v, d: v in d,
+    "DOMAIN-REGEX": lambda v, d: re.search(v, d) is not None,
+}
+# 这些类型的规则，光给一个域名判不了
+_UNCHECKABLE = {
+    "GEOIP": "要看域名解析出来的 IP",
+    "IP-CIDR": "要看域名解析出来的 IP",
+    "IP-CIDR6": "要看域名解析出来的 IP",
+    "IP-SUFFIX": "要看域名解析出来的 IP",
+    "SRC-IP-CIDR": "要看来源 IP",
+    "SRC-IP-CIDR6": "要看来源 IP",
+    "SRC-IP-SUFFIX": "要看来源 IP",
+    "IP-ASN": "要看域名解析出来的 IP 属于哪个 ASN",
+    "RULE-SET": "要读规则集文件（rule-provider）",
+    "PROCESS-NAME": "要看是哪个进程发起的",
+    "PROCESS-PATH": "要看是哪个进程发起的",
+    "PROCESS-NAME-REGEX": "要看是哪个进程发起的",
+    "PROCESS-PATH-REGEX": "要看是哪个进程发起的",
+    "NETWORK": "要看 tcp / udp",
+    "DST-PORT": "要看目标端口",
+    "SRC-PORT": "要看来源端口",
+    "IN-TYPE": "要看入站类型",
+    "IN-USER": "要看入站用户",
+    "IN-NAME": "要看入站名字",
+    "AND": "逻辑规则，组合里可能有判不了的项",
+    "OR": "逻辑规则，组合里可能有判不了的项",
+    "NOT": "逻辑规则，组合里可能有判不了的项",
+    "SUB-RULE": "子规则",
+}
+
+
+def _all_rule_rows(lines: list[str]) -> list[tuple[int, str]]:
+    """rules 里每条规则的 (行号, 文本)，**包含**自定义规则那块。
+
+    `rule check` 要看全部规则（自定义那块也真会在内核里生效），所以不能用 `_rule_line_indices()`
+    ——那个故意跳过块内，是给骨架识别用的。
+    """
+    span = _section_span(lines, "rules")
+    if span is None:
+        return []
+    return [
+        (i, _scalar(re.sub(r"^\s*-\s*", "", lines[i])))
+        for i in range(span[0] + 1, span[1])
+        if re.match(r"^\s*-\s*\S", lines[i])
+    ]
+
+
+def _target_of(text: str) -> str:
+    """规则的目标：最后一个不是修饰符的那段（`IP-CIDR,x,DIRECT,no-resolve` → DIRECT）。"""
+    for part in reversed([p.strip() for p in text.split(",")][1:]):
+        if part.lower() not in ("no-resolve", "src"):
+            return part
+    return ""
+
+
+def _verdict_of(target: str) -> str:
+    """目标 → 人话结论。"""
+    up = target.upper()
+    if up.startswith("REJECT"):
+        return "拒绝"
+    if up == "DIRECT":
+        return "直连"
+    return "走代理" if target else "?"
+
+
+def _decide(
+    rows: list[tuple[int, str]], domain: str, geo: geosite.GeoSite | None, geo_err: str
+) -> tuple[str, str, int, list[tuple[str, str]]]:
+    """逐条往下问。返回 (结论, 命中的规则文本, 行号, 判不了的规则 [(文本, 原因)])。"""
+    skipped: list[tuple[str, str]] = []
+    for line_no, text in rows:
+        head = text.split(",", 1)[0].strip().upper()
+        parts = text.split(",")
+        if head == "MATCH":
+            return _verdict_of(_target_of(text)), text, line_no, skipped
+        if head == "GEOSITE":
+            cat = parts[1].strip() if len(parts) > 1 else ""
+            if geo is None:
+                skipped.append((text, geo_err or "读不到 GeoSite.dat"))
+            elif not geo.has(cat):
+                skipped.append((text, f"GeoSite.dat 里没有类别 {cat}（拼错了？换过源？）"))
+            elif geo.match(cat, domain):
+                return _verdict_of(_target_of(text)), text, line_no, skipped
+            continue
+        if head in DOMAIN_RULES:
+            value = parts[1].strip() if len(parts) > 1 else ""
+            if not value:
+                skipped.append((text, "规则里没写值"))
+            elif DOMAIN_RULES[head](value if head == "DOMAIN-REGEX" else value.lower(), domain):
+                return _verdict_of(_target_of(text)), text, line_no, skipped
+            continue
+        skipped.append((text, _UNCHECKABLE.get(head, "这个类型我判不了")))
+    return "?", "", 0, skipped
+
+
+def _rule_check(args: argparse.Namespace) -> int:
+    """`rule check <域名>…`：这个域名会被哪条规则接住（首次匹配即生效）。"""
+    cfg = require_config()
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    rows = _all_rule_rows(lines)
+    if not rows:
+        print(dim(f"{cfg} 里没有 rules——内核的隐式兜底是直连（实测：没写 MATCH 时未命中就直连）"))
+        return 0
+
+    cats = {
+        text.split(",")[1].strip()
+        for _, text in rows
+        if text.upper().startswith("GEOSITE,") and len(text.split(",")) > 1
+    }
+    geo: geosite.GeoSite | None = None
+    geo_err = ""
+    if cats:
+        if (dat := geosite.dat_path(MIHOMO_DIR)) is None:
+            geo_err = f"内核目录里没有 GeoSite.dat（{MIHOMO_DIR}）"
+        else:
+            try:
+                geo = geosite.GeoSite(dat, cats)
+            except geosite.GeoSiteError as e:
+                geo_err = str(e)
+    groups = group_names(lines)
+    block = _custom_block_rows(lines)
+    chain = current_node() if api("/version") else None
+    print(dim(f"规则来源  {cfg}"))
+    if geo is None:
+        print(warn(f"⚠ GEOSITE 类的规则判不了：{geo_err or '没读到数据文件'}"))
+
+    for raw in args.domain:
+        domain = raw.strip().lower().rstrip(".")
+        verdict, text, line_no, skipped = _decide(rows, domain, geo, geo_err)
+        where = f"{cfg.name} 第 {line_no + 1} 行" if text else ""
+        if text and line_no in block:
+            where += "，自定义规则"
+        mark = {"走代理": warn, "直连": dim, "拒绝": bad}.get(verdict, dim)
+        target = _target_of(text) if text else ""
+        tail = f"{dim('←')} {text}{dim(f'（{where}）')}" if text else dim("没命中任何规则")
+        if len(args.domain) == 1:
+            print(f"  {domain}")
+            print(f"    {mark(verdict)}  {pad(target, 12)} {tail}")
+        else:
+            print(f"  {pad(domain, 28)} {mark(pad(verdict, 6))} {tail}")
+        if verdict == "走代理" and target and target not in groups:
+            print(warn(f"    ⚠ {target} 不在 config.yaml 的 proxy-groups 里（可能是节点名，也可能写错了）"))
+        if verdict == "走代理" and chain:
+            names, delay = chain
+            lat = f"{delay}ms" if delay else dim("无延迟数据")
+            print(dim(f"    现在内核的出口  {' → '.join(names)}  {lat}"))
+        if skipped:
+            print(warn(f"    ⚠ 它前面有 {len(skipped)} 条我判不了的规则，真实结果可能先撞上它们："))
+            for bad_text, why in skipped[:4]:
+                print(dim(f"       {bad_text}（{why}）"))
+            if len(skipped) > 4:
+                print(dim(f"       …还有 {len(skipped) - 4} 条"))
     return 0
 
 

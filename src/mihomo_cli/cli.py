@@ -14,8 +14,9 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
     nic [网卡名]       固定系统代理用哪张网卡（仅 macOS）；不固定就跟着活跃网卡走
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
     sub   set|update|show|nodes|use   订阅：只支持一个链接，节点由内核自己拉
-    rule  add|ls|rm|apply|clear       自定义分流规则：三个文件（直连/代理/拒绝）在工具目录里，
-                                      apply 才写 config.yaml 的 rules（只改标记块那几行）
+    rule  add|ls|rm|apply|clear|check 自定义分流规则：三个文件（直连/代理/拒绝）在工具目录里，
+                                      apply 才写 config.yaml 的 rules（只改标记块那几行）；
+                                      check <域名> 看它到底走代理 / 直连 / 拒绝（本地判规则）
     config [mode|log-level|allow-lan]
                       全局设置：看现状，或者改 mode / log-level / allow-lan（写 config.yaml
                       + 内核当场生效，不用重启）
@@ -81,7 +82,7 @@ SUBCOMMANDS = {
     ),
     "reset": ("清空配置：config.yaml 清成最小骨架（--hard 连备份一起删）", cmd_reset),
     "rule": (
-        "自定义分流规则：add / ls / rm / apply / clear（三个文件在 ~/.config/mihomo-cli/rules/）",
+        "自定义分流规则：add / ls / rm / apply / clear / check（三个文件在 ~/.config/mihomo-cli/rules/）",
         cmd_rule,
     ),
     "config": (
@@ -256,6 +257,8 @@ def _main(argv: list[str] | None = None) -> int:
                 "apply",
                 help="写进 config.yaml 的 rules（只改标记块那几行，插在骨架规则前面）",
             )
+            rk = rsub.add_parser("check", help="这个域名会被哪条规则接住（代理 / 直连 / 拒绝）")
+            rk.add_argument("domain", nargs="+", metavar="域名", help="一个或多个域名")
             rc = rsub.add_parser("clear", help="清空文件（不给类就清三类）")
             rc.add_argument("kind", nargs="?", choices=RULE_KINDS, metavar=RULE_KIND)
         if fn is cmd_reset:

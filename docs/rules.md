@@ -17,6 +17,7 @@
 | `rule rm <类> <域名>…` | 从文件里删 | 不碰 |
 | `rule apply` | 把三个文件写进 `rules`（**只改标记块那几行**） | 改（备份 + `mihomo -t` + 回滚） |
 | `rule clear [类]` | 清空文件（不给类就是三类全清） | 不碰 |
+| `rule check <域名>…` | 这个域名会被哪条规则接住：走代理 / 直连 / 拒绝（本地判，见下） | 不碰 |
 
 ```bash
 mihomo-cli rule add direct   example.com            # 强制直连
@@ -24,6 +25,7 @@ mihomo-cli rule add proxy    openai.com claude.ai   # 强制走代理
 mihomo-cli rule add reject   tracker.net -ads-      # ← 只收域名，这条会被拒（见下）
 mihomo-cli rule ls
 mihomo-cli rule apply                               # 写进 config.yaml
+mihomo-cli rule check www.google.com                # 它到底走代理还是直连？
 ```
 
 `add` / `rm` / `clear` / `ls` 只动工具目录里的文件，**连内核都不用装**；只有 `apply` 会写
@@ -98,6 +100,53 @@ rules:
   「你自己写了 N 条规则」→ 这种配置要同步自定义规则，用**显式**的 `rule apply`（它只改块内）。
 - 末尾那条 `MATCH` **任何情况下都不动**：它决定走不走代理（黑名单 / 白名单），替你改它就是改
   分流行为。想换模式自己改那一行。
+
+## `rule check`：这个域名走哪条规则
+
+```bash
+$ mihomo-cli rule check www.google.com
+  规则来源  /opt/homebrew/etc/mihomo/config.yaml
+    www.google.com
+      走代理  节点选择       ← GEOSITE,gfw,节点选择（config.yaml 第 46 行）
+      现在内核的出口  节点选择 → 自动选择 → 日本 中继-1 优化(3x)  72ms
+
+$ mihomo-cli rule check baidu.com tracker.net example.org
+    baidu.com                    直连   ← GEOSITE,cn,DIRECT（config.yaml 第 45 行）
+    tracker.net                  拒绝   ← DOMAIN-SUFFIX,tracker.net,REJECT（第 41 行，自定义规则）
+    example.org                  直连   ← MATCH,DIRECT（第 49 行）
+```
+
+内核的控制接口里**没有**“拿个域名问走哪条规则”的端口，所以这是工具在本地算的：按顺序把
+`config.yaml` 里的 `rules` 走一遍（首次匹配即生效，跟内核一样）。
+
+能判的规则类型：`DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` / `DOMAIN-REGEX` / `GEOSITE` /
+`MATCH`。`GEOSITE` 靠解析**内核目录里那份 `GeoSite.dat`**（见 `geosite.py`：手搜 protobuf，零依赖），
+不联网、也不需要内核在跑。
+
+**判不了的会明确报出来**：`GEOIP` / `IP-CIDR`（要先解析成 IP）、`RULE-SET`（要读规则集文件）、
+`PROCESS-NAME`（要看是哪个进程）、`NETWORK` / `DST-PORT`、`AND/OR/NOT` 这些。它们要是排在命中
+那条**前面**，结论就不敢说满：
+
+```
+      直连  DIRECT       ← MATCH,DIRECT（config.yaml 第 49 行）
+      ⚠ 它前面有 1 条我判不了的规则，真实结果可能先撞上它们：
+         GEOIP,CN,DIRECT（要看域名解析出来的 IP）
+```
+
+内核在跑时还会多打一行「现在内核的出口」（那条实际链路），方便对照：规则说走代理，当前选中的
+是哪个节点一目了然。
+
+§️ 这一层的可信度是**拿内核对照过**的：沙箱里真起一份内核，48 个域名（覆盖六类骨架 + 自定义 +
+兵底 + 几个故意构造的边界名）逐个比对日志里的 `match GeoSite(gfw)` / `DomainSuffix(x)`，
+**48/48 一致**。顺带测出两件事：
+
+- **`.dat` 里的类别名是大写的**（`CN` / `GFW` / `CATEGORY-AI-!CN`，1547 个类别里一个小写的
+  都没有），配置里写的是小写——所以两边比的是小写形式；
+- 骨架用到的那三个类别的条目**全是 `Domain` 型**（后缀语义）：`gfw` 4,365 条、
+  `category-ads-all` 190,384 条、`cn` 110,616 条（另有 553 条 `Full`、8 条 `Regex`）。
+  `Full`（精确）/`Regex`（正则）/`Plain`（子串）这三种语义代码里都实现了，只是这几类没用到。
+
+`rules` 一节要是干脆不存在，它会直说：内核的隐式兵底是直连（实测：没写 `MATCH` 时未命中就直连）。
 
 ## 踩过的点
 

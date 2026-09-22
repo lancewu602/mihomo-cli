@@ -10,12 +10,14 @@
     service      内核服务：start / stop（brew services / systemctl 的薄封装）+ 与系统代理的交界
     subs         订阅（一个链接）与 reset：改 config.yaml 的那一块；rule 命令也在这里（按行改 rules）
     rules        自定义分流规则：三个文件（direct / proxy / reject）的读写 + 生成那段标记块
+    geosite      GeoSite.dat 的最小解析与匹配（零依赖手搜 protobuf；`rule check` 用）
     config       全局设置：config 看现状 / config <键> <值> 改它（写盘 + PATCH 当场生效）
     status       一屏状态（cmd_status）
     cli          命令行入口：argparse、子命令表、异常兜底
 
-依赖方向是单向的：core → {kernel, config, rules} → {logs, systemproxy, subs} → service → cli，
-没有循环 import（`rules` 只依赖 core；命令面在 `subs`，因为它管 config.yaml 的按行修改）。
+依赖方向是单向的：core → {kernel, config, rules, geosite} → {logs, systemproxy, subs} → service → cli，
+没有循环 import（`rules` / `geosite` 只依赖 core 或纯标准库；命令面在 `subs`，因为它管 config.yaml
+的按行修改）。
 内核服务（brew services / systemctl）的**常驻、开机自启、崩了重拉归服务管理器**：service 那层
 只替你打那两条命令（从不自己 fork、也从不自己 sudo），具体归服务状态仍然只读
 （launchctl / systemctl is-active），见 docs/lifecycle.md。

@@ -88,6 +88,10 @@ rule apply               把三个文件写进 config.yaml 的 rules：**只改�
                          最前面（你的规则优先），末尾那条 MATCH 不动；写盘同样备份 + mihomo -t
                          + 不过就回滚。add / rm / clear / ls 都不碰 config.yaml，也不用装内核
 rule clear [类]          清空文件（不给类就清三类）；要从配置里也拿掉就再跑一次 rule apply
+rule check <域名>…      这个域名到底走代理 / 直连 / 拒绝：本地按顺序把 rules 走一遍（首次匹配
+                         即生效，跟内核一样），GEOSITE 靠解析内核目录里那份 GeoSite.dat；
+                         判不了的规则（GEOIP / IP-CIDR / RULE-SET / PROCESS-NAME…）会明确
+                         报出来，它们排在前面时结论就不说满。内核在跑时顺带显示当前出口链路
 
 config                   全局设置：不给子命令就看现状（config.yaml 里的值 + 内核运行时值，
                          不一致会标出来）
@@ -120,7 +124,7 @@ allow-lan），改 `config.yaml` 的东西（手写规则、geodata、策略组�
 | [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/六条规则（为何选 v2ray-rules-dat、为何是黑名单模式）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
 | [docs/lifecycle.md](docs/lifecycle.md) | 系统代理怎么开关（start/stop 顺带管）、网卡怎么选、两层之间那两条不变式 |
-| [docs/rules.md](docs/rules.md) | 自定义分流规则：三个文件怎么存、`rule` 五个动作、写进 `config.yaml` 的那段标记块、为什么插在骨架前面 |
+| [docs/rules.md](docs/rules.md) | 自定义分流规则：三个文件怎么存、`rule` 六个动作（含 `check` 看某个域名走哪条规则）、写进 `config.yaml` 的那段标记块、为什么插在骨架前面 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，
