@@ -91,7 +91,7 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 | 矩阵项 | 产物 |
 |---|---|
 | `macos-14`（Apple Silicon） | `mihomo-cli-<tag>-macos-arm64.tar.gz` + `…-macos-arm64-onefile` |
-| `macos-13`（Intel） | `mihomo-cli-<tag>-macos-x86_64.tar.gz` + `…-macos-x86_64-onefile` |
+| `macos-15-intel`（Intel） | `mihomo-cli-<tag>-macos-x86_64.tar.gz` + `…-macos-x86_64-onefile` |
 | `ubuntu-22.04` | `mihomo-cli-<tag>-linux-x86_64.tar.gz` + `…-linux-x86_64-onefile` |
 
 同一批文件算一份 `SHA256SUMS` 一起传。每个平台都出两种产物：目录版是默认推荐（启动快），
@@ -104,6 +104,9 @@ spec 里几个决定的理由（改之前先看那里的注释）：
   压就换更老的镜像（注意 Debian 12 比 Ubuntu 22.04 **更新**，别选反方向）。
 - **macOS 是「在哪种架构上构建就得到哪种二进制」**，所以要两个 runner。想一个文件同跑两种
   架构，得用 universal2 的 Python 并把 spec 里 `target_arch` 改成 `"universal2"`。
+  Intel 用的是 `macos-15-intel`：**别再退回 `macos-13`**，它已于 2025-12-04 退役，
+  用退役标签的表现是 job 永远排队（不报错）而把整个 run 拖住；`macos-15-intel` 官方说
+  保留到 2027-08，之后 Actions 不再提供 x86_64 macOS。
 - macOS 那份加了 ad-hoc 签名（`codesign --force --sign -`）：本机构建自用不必签，挂上去
   给别人从浏览器下载会被加 `com.apple.quarantine`。正式分发仍要 Developer ID + 公证。
 - 冒烟只跑 `--help`：runner 上没有 mihomo，`status` 那类要靠外部命令的验不了

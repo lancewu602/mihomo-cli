@@ -9,8 +9,10 @@ name: release
 # 两个平台选择的理由（详见 docs/packaging.md）：
 #   · Linux 固定 ubuntu-22.04：PyInstaller 产物绑构建机的 glibc，越老越能跑新的；
 #     反过来会在更新的机器上报 GLIBC_2.xx not found。Alpine / musl 不行，那是另一套 libc。
-#   · macOS 用 macos-14（Apple Silicon）与 macos-13（Intel）：在哪种架构上构建就得到哪种
-#     二进制，一个文件同时跑两种要 universal2 的 Python + spec 里 target_arch。
+#   · macOS 用 macos-14（Apple Silicon）与 macos-15-intel（Intel）：在哪种架构上构建就得到
+#     哪种二进制，一个文件同时跑两种要 universal2 的 Python + spec 里 target_arch。
+#     旧标签 macos-13 已于 2025-12-04 退役（用它只会永远排队，不报错）；macos-15-intel
+#     是 Intel 的接替标签，官方说保留到 2027-08。
 #   · 每个平台都出「目录版 + 单文件」：目录版启动快（默认推荐），单文件好拷贝但每次启动
 #     都要解包（本机 macOS 26 实测 --help 6 秒 vs 0.1 秒，见 docs/packaging.md）。
 
@@ -46,7 +48,7 @@ jobs:
         include:
           - os: macos-14
             asset: macos-arm64
-          - os: macos-13
+          - os: macos-15-intel
             asset: macos-x86_64
           - os: ubuntu-22.04
             asset: linux-x86_64
