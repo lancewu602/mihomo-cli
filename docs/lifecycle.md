@@ -26,7 +26,7 @@
 确认端口”那一点（`restart` 仍然只有原生命令，没有暴露成子命令）。
 
 ```
-core → {kernel, config} → logs / systemproxy / subs → service → cli
+core → {kernel, config, rules} → logs / systemproxy / subs → service → cli
 ```
 
 - `kernel.py`：启动**之前**的事都不做，只读——进程 / 端口 / 服务状态 / 控制接口 / 出口链路 / `probe` 探测
@@ -38,6 +38,8 @@ core → {kernel, config} → logs / systemproxy / subs → service → cli
   节点由内核自己拉
 - `config.py`：`config` 看现状 / `config mode|log-level|allow-lan <值>` 改它 —— 写盘（同样过
   `commit_config`）+ 内核在跑就顺手 `PATCH /configs` 当场生效（见 docs/control-api.md）
+- `rules.py`：自定义分流规则的三个文件（direct / proxy / reject）读写与生成那段标记块——
+  只收域名，写进 `rules` 靠 `subs`（见 docs/rules.md）
 - `service.py`：`start|stop` —— 上面那条“薄封装”+ 与系统代理的交界（开/摘代理就发生在这两步里）
 - `nics.py`：`nics` 列表 / `nic` 固定用哪张网卡（选网卡的优先级：显式 > 固定 > 活跃）
 

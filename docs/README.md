@@ -9,6 +9,7 @@
 | [subscription.md](subscription.md) | 要动 `sub set\|update\|show`（为什么在配置里只维护一块、换链接与更新差在哪、为什么不热重载） |
 | [packaging.md](packaging.md) | 要构建二进制、改安装方式、加模块、动 `pyproject.toml` |
 | [lifecycle.md](lifecycle.md) | 动 `start\|stop`（内核服务 + 系统代理的开关）或 `nic`（选哪张网卡），或改那两条不变式 |
+| [rules.md](rules.md) | 动 `rule`（自定义分流规则：三个文件、写进 `rules` 的那段标记块、与骨架的优先关系） |
 
 ## 分发
 

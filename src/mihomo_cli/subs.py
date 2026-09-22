@@ -24,6 +24,7 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
+from . import rules
 from .core import (
     BACKUP_DIR,
     FALLBACK_PORT,
@@ -452,7 +453,10 @@ def _match_rule(lines: list[str]) -> tuple[int, str] | None:
     span = _section_span(lines, "rules")
     if span is None:
         return None
+    skip = _custom_block_rows(lines)
     for i in range(span[0] + 1, span[1]):
+        if i in skip:
+            continue
         item = _scalar(re.sub(r"^\s*-\s*", "", lines[i]))
         if item.upper().startswith("MATCH"):
             return i, (_unquote(item.split(",", 1)[1]) if "," in item else "")
@@ -661,7 +665,10 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
             lines[rspan[1] : rspan[1]] = block
         else:
             _new_section(lines, "rules:", block)
-        return [dim(f"规则      补了 {_rule_names()} + MATCH,{SKELETON_MATCH}")], True
+        note = [dim(f"规则      补了 {_rule_names()} + MATCH,{SKELETON_MATCH}")]
+        if extra := _apply_custom_rules(lines):  # 三个文件里有东西就一起带上，插在最前面
+            note.append(extra)
+        return note, True
 
     if match is not None and items[-1] in _our_match_items():
         mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
@@ -669,12 +676,20 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
         if have != mine and any(have == _rule_items_of(r) for r in LEGACY_SPLIT_RULES):
             add = _insert_missing_rules(lines, have, mine, match[0])
             where = "插在自己那几条规则前面" if have else "插在它前面"
-            return [dim(f"规则      补了 {'、'.join(add)}（老骨架，{where}）")], True
+            note = [dim(f"规则      补了 {'、'.join(add)}（老骨架，{where}）")]
+            if extra := _apply_custom_rules(lines):
+                note.append(extra)
+            return note, True
 
     mine = _skeleton_rule_items()[: -1]  # 本工具的规则，不含兜底 MATCH
     if items[:-1] == mine and items[-1] in _our_match_items():
         # 兜底是两条里的哪一条都算「自家人」：老配置那条 MATCH,节点选择 是白名单模式，照样不动它
-        return [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 {items[-1]}），没动")], False
+        note = [dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 {items[-1]}）")]
+        extra = _apply_custom_rules(lines)  # 这一路上只可能把自定义规则的新增/改动补上
+        if extra:
+            return [*note, extra], True
+        note[0] = dim(f"规则      已经是本工具的骨架（{_rule_names()} + 兜底 {items[-1]}），没动")
+        return note, False
 
     if len(items) == 1 and items[0].upper().startswith("MATCH"):
         note.append(
@@ -686,6 +701,79 @@ def _ensure_rules(lines: list[str]) -> tuple[list[str], bool]:
     else:
         note.append(dim(f"规则      你自己写了 {len(items)} 条规则，一个字节没动"))
     return note, False
+
+
+def _custom_block_span(lines: list[str]) -> tuple[int, int] | None:
+    """自定义规则那段标记块占的行区间 [起, 止)。没找到开始标记给 None。
+
+    只认标记本身，不认内容：块里写了什么、几条、是不是被手改过，都无所谓——
+    反正 apply 是整块重写（或整块删掉）。"""
+    begin = next((i for i, line in enumerate(lines) if rules.MARK_BEGIN in line), None)
+    if begin is None:
+        return None
+    end = next((i for i in range(begin + 1, len(lines)) if rules.MARK_END in lines[i]), None)
+    if end is None:
+        # 只有开始标记、结束标记被手删了：到 rules 节末尾为止，别把后面的规则一起吃掉
+        span = _section_span(lines, "rules")
+        end = (span[1] - 1) if span else begin
+    return begin, end + 1
+
+
+def _custom_block_state(lines: list[str]) -> tuple[bool, bool]:
+    """config.yaml 里那段自定义规则的 (在不在, 跟文件是否一致)。给 `rule ls` 用。"""
+    span = _custom_block_span(lines)
+    if span is None:
+        return False, False
+    rows = _rule_line_indices(lines)
+    indent = "  "
+    if rows:
+        row = lines[rows[0]]
+        indent = row[: len(row) - len(row.lstrip())]
+    return True, lines[span[0] : span[1]] == rules.block_lines(indent)
+
+
+def _apply_custom_rules(lines: list[str]) -> str | None:
+    """把三个文件里的规则写进（或更新到）config.yaml 的 rules。没改动就给 None。
+
+    **只动标记块那几行**：块外（骨架规则、你手写的规则、末尾那条 MATCH）一个字节不碰。
+    块不存在时插在 rules 的**最前面**——用户规则优先于骨架（所以 `example.com,DIRECT`
+    能盖掉 `GEOSITE,gfw,节点选择`）。三个文件都空时，把块删掉。
+
+    返回的是给用户看的一句说明（调用方决定打到哪里）。
+    """
+    span = _section_span(lines, "rules")
+    old = _custom_block_span(lines)
+    rows = _rule_line_indices(lines)
+    indent = "  "
+    if rows:  # 跟已有规则对齐缩进，混缩进会让 YAML 序列解析失败（实测踩过）
+        row = lines[rows[0]]
+        indent = row[: len(row) - len(row.lstrip())]
+    block = rules.block_lines(indent)
+
+    if old is not None:
+        if lines[old[0] : old[1]] == block:
+            return None  # 一模一样：一个字节不动（幂等的关键）
+        if block:
+            lines[old[0] : old[1]] = block
+            return dim(f"规则      自定义规则已更新（{rules.describe()}）")
+        del lines[old[0] : old[1]]
+        return dim("规则      三个文件都空了，标记块已删掉")
+
+    if not block:
+        return None  # 没块、也没规则：什么都不用做
+    if span is not None and _flow_head(lines, span[0]):
+        # 流式 rules 按行改不了。这里不 die：sub set 不该因为一个看不懂的 rules 就整个停下
+        return warn(
+            "⚠ 规则      rules 是流式写法（{…}），自定义规则没写进去；先改成块状再 rule apply"
+        )
+
+    if span is None:  # 连 rules 节都没有：建一节（顺带补一条兜底，否则读起来像漏了东西）
+        lines.extend(["\n", "rules:\n", *block, f"  - MATCH,{SKELETON_MATCH}\n"])
+        return dim(f"规则      新建 rules 节 + 自定义规则（{rules.describe()}）+ MATCH,{SKELETON_MATCH}")
+
+    at = rows[0] if rows else _content_end(lines, span[0], span[1])
+    lines[at:at] = block
+    return dim(f"规则      自定义规则插在最前面（{rules.describe()}）")
 
 
 def _split_rule_lines() -> list[str]:
@@ -708,7 +796,7 @@ def _insert_missing_rules(
     缩进照抄被插入位置那一行——混缩进的话 YAML 序列会直接解析失败。"""
     span = _section_span(lines, "rules")
     assert span is not None  # 调用方已经确认 rules 节存在
-    rows = [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
+    rows = _rule_line_indices(lines)  # 不含自定义规则那一段（否则新规则会插进块里、被块覆盖掉）
     plan: dict[int, list[str]] = {}
     for item in mine:
         if item in have:
@@ -732,12 +820,28 @@ def _rule_names() -> str:
     return "、".join(f"{name},{target}" for name, target in SPLIT_RULES)
 
 
+def _custom_block_rows(lines: list[str]) -> set[int]:
+    """标记块占的行号（含两条标记本身）。
+
+    给 `_rule_items()` / `_match_rule()` / `_rule_line_indices()` 用：**块里的东西不是**
+    本工具写的骨架规则，是用户自己的分流。不排除掉的话，“骨架 + 自定义块”会被认成
+    “用户自己写的 N 条规则”，于是升级路径、幂等性全失效（实测踩到过）。
+    """
+    span = _custom_block_span(lines)
+    return set(range(*span)) if span else set()
+
+
 def _rule_line_indices(lines: list[str]) -> list[int]:
-    """rules 节里每条规则所在的行号（顺序即文件顺序）。"""
+    """rules 节里每条规则所在的行号（顺序即文件顺序，不含自定义规则那一段）。"""
     span = _section_span(lines, "rules")
     if span is None:
         return []
-    return [i for i in range(span[0] + 1, span[1]) if re.match(r"^\s*-\s*\S", lines[i])]
+    skip = _custom_block_rows(lines)
+    return [
+        i
+        for i in range(span[0] + 1, span[1])
+        if i not in skip and re.match(r"^\s*-\s*\S", lines[i])
+    ]
 
 
 def group_names(lines: list[str]) -> set[str]:
@@ -753,13 +857,17 @@ def group_names(lines: list[str]) -> set[str]:
 
 
 def _rule_items(lines: list[str]) -> list[str]:
-    """rules 里的规则项（按顺序，已去掉 `- ` 和引号）。本工具生成的规则都是单行。"""
+    """rules 里的规则项（按顺序，已去掉 `- ` 和引号）。本工具生成的规则都是单行。
+
+    **不含自定义规则那一段**（见 `_custom_block_rows()`）：那几条是用户自己的分流，
+    拿它们去比对“是不是本工具的骨架”只会得出错误结论。"""
     if (span := _section_span(lines, "rules")) is None:
         return []
+    skip = _custom_block_rows(lines)
     return [
         _scalar(re.sub(r"^\s*-\s*", "", line))
-        for line in lines[span[0] + 1 : span[1]]
-        if re.match(r"^\s*-\s*\S", line)
+        for i, line in enumerate(lines[span[0] + 1 : span[1]], span[0] + 1)
+        if i not in skip and re.match(r"^\s*-\s*\S", line)
     ]
 
 
@@ -1343,4 +1451,146 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     code = _after_write("下次启动时就是这份最小配置", show_nodes=False)
     print(dim("  想重新配起来：mihomo-cli sub set <订阅链接>"))
+    return code
+
+
+# ─────────────────────── rule：自定义分流规则 ───────────────────────
+#
+# 三个文件（direct / proxy / reject）住在工具目录里，内容只有域名（为什么要这么存见 rules.py
+# 开头那四条）。命令面五个动作：add / ls / rm / apply / clear。**只有 apply 改 config.yaml**
+# （而且只改标记块那几行），其余四个只动工具目录里的文件——所以它们连内核都不用装
+# （见 cli._needs_kernel）。
+
+
+def cmd_rule(args: argparse.Namespace) -> int:
+    """rule 的动作分发。不给动作 = ls（只读）。"""
+    action = getattr(args, "rule_action", None) or "ls"
+    return {
+        "add": _rule_add,
+        "ls": _rule_ls,
+        "rm": _rule_rm,
+        "apply": _rule_apply,
+        "clear": _rule_clear,
+    }[action](args)
+
+
+def _rule_ls(args: argparse.Namespace) -> int:
+    """看三个文件里有什么，以及 config.yaml 那边应用得怎么样。"""
+    kinds = [args.kind] if getattr(args, "kind", None) else list(rules.KINDS)
+    print(dim(f"自定义规则  {rules.files_hint()}"))
+    for kind in kinds:
+        domains, bad = rules.scan(kind)
+        path = rules.path_of(kind)
+        print(
+            "  "
+            + pad(kind, 8)
+            + pad(rules.TARGETS[kind], 10)
+            + f"{len(domains)} 条  "
+            + dim(str(path) + ("" if path.exists() else "（文件还没建）"))
+        )
+        if domains:
+            print("    " + dim("、".join(domains)))
+        for line_no, raw, why in bad:
+            print(warn(f"⚠ 第 {line_no} 行不会生成规则：{raw} —— {why}"))
+
+    cfg = config_path()
+    if not cfg.exists():
+        print(warn(f"⚠ 没有 {cfg}（内核那还没配）——三个文件先攒着，有配置了再 rule apply"))
+        return 0
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    applied, same = _custom_block_state(lines)
+    if not applied and not any(rules.read(kind) for kind in rules.KINDS):
+        print(dim("  config.yaml 里没有自定义规则（三个文件也都是空的）"))
+    elif applied and same:
+        print(f"{ok('✓')} config.yaml 里那段是最新的  {dim(f'（{rules.describe()}）')}")
+    elif applied:
+        print(warn("⚠ config.yaml 里那段跟文件不一致（文件改过了？）——`rule apply` 同步一下"))
+    else:
+        print(warn("⚠ config.yaml 里还没有这段——`rule apply` 写进去（sub set 也会顺带带上）"))
+    print(dim("  加/删：mihomo-cli rule add|rm <direct|proxy|reject> <域名>；文件也可以直接手改"))
+    return 0
+
+
+def _rule_add(args: argparse.Namespace) -> int:
+    """`rule add <类> <域名>…`：只动文件，不碰 config.yaml。"""
+    added, dup, bad = rules.add(args.kind, args.domain)
+    for raw, why in bad:
+        print(warn(f"⚠ 跳过  {raw} —— {why}"))
+    if added:
+        print(
+            f"{ok('✓')} {args.kind} 加了 {len(added)} 条 → {rules.TARGETS[args.kind]}"
+            f"  {dim('、'.join(added))}"
+        )
+    if dup:
+        print(dim(f"  已经在里面了（没重复加）：{'、'.join(dup)}"))
+    others = {k: set(rules.read(k)) for k in rules.KINDS if k != args.kind}
+    for domain in added:
+        for kind, have in others.items():
+            if domain in have:  # 同一个域名在两类里：先出现的那类先命中（direct → proxy → reject）
+                print(
+                    warn(
+                        f"⚠ {domain} 在 {kind} 里也有一份——按 "
+                        f"{' → '.join(rules.KINDS)} 的顺序，先命中的那个生效；"
+                        f"想只留一边就把另一边的 rule rm 掉"
+                    )
+                )
+    if not added and not dup and not bad:
+        print(dim("  什么都没加（没给域名？）"))
+        return 1
+    if added:
+        print(dim("  生效：mihomo-cli rule apply（sub set 也会带上；文件也可以直接手改）"))
+    return 1 if bad else 0
+
+
+def _rule_rm(args: argparse.Namespace) -> int:
+    """`rule rm <类> <域名>…`：只动文件。"""
+    gone, absent = rules.remove(args.kind, args.domain)
+    if gone:
+        print(f"{ok('✓')} {args.kind} 删了 {len(gone)} 条  {dim('、'.join(gone))}")
+        print(dim("  config.yaml 里那段还是旧的：mihomo-cli rule apply 同步"))
+    if absent:
+        print(warn(f"⚠ {args.kind} 里本来就没有：{'、'.join(absent)}"))
+    return 0 if gone else 1
+
+
+def _rule_clear(args: argparse.Namespace) -> int:
+    """`rule clear [类]`：把文件删掉（不给类就是三类全清）。"""
+    kinds = [args.kind] if getattr(args, "kind", None) else list(rules.KINDS)
+    hit = [kind for kind in kinds if rules.clear(kind)]
+    if not hit:
+        print(dim("  本来就都是空的"))
+        return 0
+    print(f"{ok('✓')} 清空了 {'、'.join(hit)}  {dim(rules.files_hint())}")
+    print(dim("  config.yaml 里那段要 rule apply 才会跟着清掉（留空文件不会自己生效）"))
+    return 0
+
+
+def _rule_apply(_: argparse.Namespace) -> int:
+    """把三个文件写进 config.yaml 的 rules：只动标记块那几行，其余一个字节不碰。"""
+    cfg = require_config()
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    if not any(rules.read(kind) for kind in rules.KINDS) and _custom_block_span(lines) is None:
+        print(dim("三个文件都是空的，config.yaml 里也没有自定义规则——没什么可应用的"))
+        return 0
+    if (span := _section_span(lines, "rules")) is not None and _flow_head(lines, span[0]):
+        die(
+            f"{cfg} 的 rules 是流式写法（{{…}}），按行改的活干不了。\n"
+            f"  先手工改成每行一条 `  - 规则` 的块状写法，再来 rule apply。"
+        )
+    if rules.read("proxy") and GROUP_NAME not in group_names(lines):
+        print(
+            warn(
+                f"⚠ {GROUP_NAME} 这个组不在 config.yaml 里——proxy 类的目标就是它，"
+                f"mihomo -t 可能会因此报错（报错会自动回滚）"
+            )
+        )
+    print(dim(f"配置文件  {cfg}"))
+    if (note := _apply_custom_rules(lines)) is None:
+        print(f"{ok('✓')} config.yaml 里那段已经是最新的（{rules.describe()}），一个字节没改")
+        return 0
+    print(note)
+    if not commit_config(cfg, lines, f"rule apply：自定义规则（{rules.describe()}）"):
+        return 1
+    code = _after_write("内核没在跑：下次启动时生效", show_nodes=False)
+    print(dim(f"  三个文件在 {rules.files_hint()}；不想用了就 rule clear + rule apply"))
     return code

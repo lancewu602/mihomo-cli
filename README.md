@@ -7,9 +7,10 @@
 > 订阅只做一件事——**一个链接**：`sub set` 把它写进 `config.yaml` 的 `proxy-providers`（节点由内核
 > 自己按 url 拉，本工具不下载、不解析节点），`sub update` 让内核当场重拉；`reset` 是它的反面，
 > 把 `config.yaml` 清成最小骨架（并摘掉系统代理）。骨架里会补一套默认分流规则和 geodata 设置，
-> **但只在它们缺失时补**：你自己写的规则 / 组 / 设置一个字节不碰，自定义分流仍是手工活（或者
-> mihomo 自带控制面板的活）。本工具就三块：**系统代理那一层**、**订阅那一块**、**对运行中内核的
-> 只读观测**，另加一个 `config`：改三项全局设置。
+> **但只在它们缺失时补**：你自己写的规则 / 组 / 设置一个字节不碰。自定义分流走 `rule`：三个文件
+> （直连 / 代理 / 拒绝，一行一个域名）在工具目录里，`rule apply` 把它们写进 `rules` 最前面那段
+> 标记块。本工具就四块：**系统代理那一层**、**订阅那一块**、**自定义规则那一块**、
+> **对运行中内核的只读观测**，另加一个 `config`：改三项全局设置。
 
 ## 它解决什么
 
@@ -77,6 +78,17 @@ reset [--hard]           清空配置：config.yaml 清成最小骨架（顶部�
                          系统代理、删掉订阅缓存；--hard 连工具备份一起删（放弃回滚）。
                          **不新建备份**，靠 mihomo -t 校验 + 内存还原兜底
 
+rule add <类> <域名>…     自定义分流规则：三个文件（一行一个域名）在 ~/.config/mihomo-cli/rules/
+                         下——direct → DIRECT、proxy → 节点选择、reject → REJECT。只收域名
+                         （粘网址 / 带端口 / 大写 / `*.` 都自动归一；IP、关键词、中文域名会被拒
+                         并告诉你为什么）。文件也可以直接手改
+rule ls [类]             看三个文件里有什么、config.yaml 那边应用了没（默认动作）
+rule rm <类> <域名>…     从文件里删
+rule apply               把三个文件写进 config.yaml 的 rules：**只改标记块那几行**，插在骨架规则
+                         最前面（你的规则优先），末尾那条 MATCH 不动；写盘同样备份 + mihomo -t
+                         + 不过就回滚。add / rm / clear / ls 都不碰 config.yaml，也不用装内核
+rule clear [类]          清空文件（不给类就清三类）；要从配置里也拿掉就再跑一次 rule apply
+
 config                   全局设置：不给子命令就看现状（config.yaml 里的值 + 内核运行时值，
                          不一致会标出来）
 config mode <值>         运行模式：rule 按规则分流 / global 全部走 GLOBAL 组 / direct 全部直连
@@ -95,9 +107,9 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 
 每个子命令的开关：`mihomo-cli <命令> --help`。
 
-除了订阅那一块（`sub set` 写的那套）和 `config` 那三项（mode / log-level / allow-lan），
-改 `config.yaml` 的东西（自定义规则、geodata、策略组默认选中）都是手工活：本工具只在缺的时候
-补一套默认骨架，你已经写过的那部分一个字节不碰。
+除了订阅那一块（`sub set` 写的那套）、`rule` 那套和 `config` 那三项（mode / log-level /
+allow-lan），改 `config.yaml` 的东西（手写规则、geodata、策略组默认选中）都是手工活：本工具只在
+缺的时候补一套默认骨架，你已经写过的那部分一个字节不碰。
 `group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板（`external-controller`）即可。
 
 ## 文档
@@ -108,6 +120,7 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 | [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/六条规则（为何选 v2ray-rules-dat、为何是黑名单模式）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
 | [docs/lifecycle.md](docs/lifecycle.md) | 系统代理怎么开关（start/stop 顺带管）、网卡怎么选、两层之间那两条不变式 |
+| [docs/rules.md](docs/rules.md) | 自定义分流规则：三个文件怎么存、`rule` 五个动作、写进 `config.yaml` 的那段标记块、为什么插在骨架前面 |
 | [docs/README.md](docs/README.md) | 文档索引与维护约定 |
 
 安装后想在本地找这几篇：`<前缀>/share/doc/mihomo-cli/`（`uv tool install` 装的话，
@@ -116,11 +129,12 @@ logs [--truncate]        内核日志在哪、多大、级别；--truncate 清�
 ## 数据与配置
 
 - 工具数据在 `~/.config/mihomo-cli/`：`state.json`（macOS 系统代理的原状态）、`nic`（`mihomo-cli nic`
-  固定的那张网卡，单独一个文件）、`backups/`（写配置前的备份，留最近 5 份；`reset --hard` 会删掉它）；
-  环境变量 `MIHOMO_CLI_DIR` 可覆盖。
+  固定的那张网卡，单独一个文件）、`rules/`（自定义分流规则的三个文件）、`backups/`（写配置前的备份，
+  留最近 5 份；`reset --hard` 会删掉它）；环境变量 `MIHOMO_CLI_DIR` 可覆盖。
 - 内核目录自动探测（`~/.config/mihomo`、`/etc/mihomo`、`/opt/homebrew/etc/mihomo`…），
-  也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，写它的只有两处——`sub set` 和
-  `config`（那三项全局设置）。`sub set` 只动 `proxy-providers` 里的 `airport`、引用它的组，
+  也可以用 `MIHOMO_DIR` 指定。工具只读里面的 `config.yaml`，写它的只有三处——`sub set`、
+  `rule apply` 和 `config`（那三项全局设置）。`sub set` 只动 `proxy-providers` 里的 `airport`、
+  引用它的组，
   以及**缺失时才补**的那几条（分流规则、兜底 MATCH、那几项全局设置）；你已经写过的组、规则、
   设置一律不碰——全局设置里已有的**顶层键**不动，`geox-url` / `profile` 这种嵌套节则是
   **缺哪个子键补哪个**（升级前只写了 `geox-url.geosite` 的配置，会在下次写配置时补上

@@ -13,7 +13,9 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
                       stop  摘系统代理 → 停内核
     nic [网卡名]       固定系统代理用哪张网卡（仅 macOS）；不固定就跟着活跃网卡走
     nics              列网卡（macOS 网络服务 / Linux 接口、默认路由、代理变量）
-    sub   set|update|show   订阅：只支持一个链接，节点由内核自己拉
+    sub   set|update|show|nodes|use   订阅：只支持一个链接，节点由内核自己拉
+    rule  add|ls|rm|apply|clear       自定义分流规则：三个文件（直连/代理/拒绝）在工具目录里，
+                                      apply 才写 config.yaml 的 rules（只改标记块那几行）
     config [mode|log-level|allow-lan]
                       全局设置：看现状，或者改 mode / log-level / allow-lan（写 config.yaml
                       + 内核当场生效，不用重启）
@@ -23,8 +25,14 @@ networksetup）、订阅那一块（sub / reset）、只读观测（status / nic
 
 订阅只做一件事：一个链接。`sub set <链接>` 把它写进 config.yaml 的 proxy-providers，节点由内核
 自己按 url 拉（本工具不下载、不解析节点）；`sub update` 让内核当场重拉。`reset` 反过来：把
-config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--hard 连备份一起删）。规则 / geodata /
-策略组不做：那是手工活，或者用 mihomo 自带的控制面板。
+config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--hard 连备份一起删）。骨架里会补一套
+默认分流规则（六条 + 兜底 MATCH）和 geodata 设置，**但只在缺的时候补**。
+
+自定义分流规则走 `rule`：三个文件（direct / proxy / reject，一行一个域名）在
+~/.config/mihomo-cli/rules/ 下，`rule apply` 把它们展开成 `DOMAIN-SUFFIX,…` 写进 rules 里那段
+带标记的注释块（只动块内，插在骨架规则前面所以优先）；`sub set` 碰到有文件也会顺带带上。
+要 `DOMAIN-KEYWORD` / `IP-CIDR` / `PROCESS-NAME` 这类写法，直接手写 config.yaml 的 rules——
+本工具不碰你手写的规则。策略组仍然是手工活（或者用 mihomo 自带的控制面板）。
 
 全局设置只做三项：`config mode`（rule / global / direct）、`config log-level`
 （silent / error / warning / info / debug）和 `config allow-lan`（true / false）。这三项值域封闭、
@@ -54,9 +62,12 @@ from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
+from .rules import KINDS as RULE_KINDS
 from .service import cmd_start, cmd_stop
 from .status import cmd_status
-from .subs import cmd_reset, cmd_sub
+from .subs import cmd_reset, cmd_rule, cmd_sub
+
+RULE_KIND = "{" + ",".join(RULE_KINDS) + "}"
 
 SUBCOMMANDS = {
     "nics": ("列网卡（macOS 网络服务 / Linux 接口与路由）", cmd_nics),
@@ -69,6 +80,10 @@ SUBCOMMANDS = {
         cmd_sub,
     ),
     "reset": ("清空配置：config.yaml 清成最小骨架（--hard 连备份一起删）", cmd_reset),
+    "rule": (
+        "自定义分流规则：add / ls / rm / apply / clear（三个文件在 ~/.config/mihomo-cli/rules/）",
+        cmd_rule,
+    ),
     "config": (
         "全局设置：看现状，或者改 mode / log-level（写盘 + 内核当场生效）",
         cmd_config,
@@ -90,8 +105,10 @@ if not IS_MACOS:
 # （旧配置里的 `sub:` 也不会被认成本工具的订阅）。
 # sub set 要 mihomo：写完配置靠 `mihomo -t` 校验。show 是纯读；update 走控制接口或
 # 服务管理器，两者都用不到这个可执行文件，没装内核也该能用。config 同理：不带子命令（看
-# 现状）只读配置 + 问一下控制接口，带了子命令才写盘、才要 `mihomo -t`。
+# 现状）只读配置 + 问一下控制接口，带了子命令才写盘、才要 `mihomo -t`。rule 也一样：
+# add / ls / rm / clear 只动工具目录里的三个文件，只有 apply 写 config.yaml、才要 `-t`。
 SUB_NEEDS_KERNEL = {"set"}
+RULE_NEEDS_KERNEL = {"apply"}
 
 
 def _needs_kernel(args: argparse.Namespace) -> bool:
@@ -112,6 +129,8 @@ def _needs_kernel(args: argparse.Namespace) -> bool:
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL
     if args.action == "config":  # 看现状是纯读；只有三个 setter 写盘
         return getattr(args, "config_action", None) is not None
+    if args.action == "rule":  # 只有 apply 写 config.yaml（要 mihomo -t）
+        return getattr(args, "rule_action", None) in RULE_NEEDS_KERNEL
     return True
 
 
@@ -219,6 +238,26 @@ def _main(argv: list[str] | None = None) -> int:
                 ),
             )
             ca.add_argument("value", choices=BOOLS, metavar="{" + ",".join(BOOLS) + "}")
+        if fn is cmd_rule:
+            rsub = p.add_subparsers(dest="rule_action")
+            ra = rsub.add_parser(
+                "add", help="加域名（只动工具目录里的文件，不碰 config.yaml）"
+            )
+            ra.add_argument("kind", choices=RULE_KINDS, metavar=RULE_KIND, help="加进哪一类")
+            ra.add_argument("domain", nargs="+", metavar="域名", help="一个或多个域名")
+            rl = rsub.add_parser(
+                "ls", help="看三个文件里有什么、config.yaml 那边应用了没（默认动作）"
+            )
+            rl.add_argument("kind", nargs="?", choices=RULE_KINDS, metavar=RULE_KIND)
+            rr = rsub.add_parser("rm", help="删域名（只动文件）")
+            rr.add_argument("kind", choices=RULE_KINDS, metavar=RULE_KIND)
+            rr.add_argument("domain", nargs="+", metavar="域名")
+            rsub.add_parser(
+                "apply",
+                help="写进 config.yaml 的 rules（只改标记块那几行，插在骨架规则前面）",
+            )
+            rc = rsub.add_parser("clear", help="清空文件（不给类就清三类）")
+            rc.add_argument("kind", nargs="?", choices=RULE_KINDS, metavar=RULE_KIND)
         if fn is cmd_reset:
             p.add_argument(
                 "--hard",
