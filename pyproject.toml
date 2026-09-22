@@ -45,7 +45,7 @@ packages = ["mihomo_cli"]
 # 挤到同一个目录会互相覆盖（谁活下来看遍历顺序）。
 # sdist 那份由 MANIFEST.in 管；两边都要维护。
 [tool.setuptools.data-files]
-"share/doc/mihomo-cli" = ["README.md", "LICENSE"]
+"share/doc/mihomo-cli" = ["README.md", "CHANGELOG.md", "LICENSE"]
 "share/doc/mihomo-cli/docs" = ["docs/*.md"]
 
 # 开发时的检查与格式化：ruff 一个工具顶 flake8 / isort / black / pyupgrade。

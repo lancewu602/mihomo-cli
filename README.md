@@ -121,6 +121,7 @@ allow-lan），改 `config.yaml` 的东西（手写规则、geodata、策略组�
 
 | 文档 | 什么时候看 |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | 每个版本对外行为变了什么 |
 | [docs/control-api.md](docs/control-api.md) | mihomo 控制接口（external-controller）提供什么、本项目用了哪些端点 |
 | [docs/subscription.md](docs/subscription.md) | 订阅为什么只支持一个、为什么用 proxy-provider 而不是把节点写进 `proxies:`、换链接与更新的差别、骨架里那两组/六条规则（为何选 v2ray-rules-dat、为何是黑名单模式）/geodata 设置是怎么来的 |
 | [docs/packaging.md](docs/packaging.md) | 构建 macOS / Linux 二进制（实测启动耗时、签名、glibc）、安装方式、`console_scripts` 的异常兜底坑 |
