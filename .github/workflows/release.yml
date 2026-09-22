@@ -15,6 +15,15 @@ name: release
 #     是 Intel 的接替标签，官方说保留到 2027-08。
 #   · 每个平台都出「目录版 + 单文件」：目录版启动快（默认推荐），单文件好拷贝但每次启动
 #     都要解包（本机 macOS 26 实测 --help 6 秒 vs 0.1 秒，见 docs/packaging.md）。
+#
+# action 大版本必须是以 Node 24 为目标的那些：Node 20 已在 2026-04 EOL，runner 从
+# 2026-06-16 起默认用 Node 24 跑 JS action（不报错，只在结尾给一条「被强制」的
+# deprecation 警告），2026-09-23 起彻底移除 Node 20。别按「升到 v5 就好」的直觉改：
+#   checkout v5 / setup-python v6 → using: node24
+#   但 upload-artifact v5 与 download-artifact v5 仍然是 using: node20！
+#   得 upload v6+ / download v7+ 才是 node24。
+# 两个 artifact action 的大版本号本来就不一样（upload 最新 v7、download 最新 v8），
+# 它们共用 v4 起的 artifact 服务接口，能配对工作（本 workflow 实跑验证过）。
 
 on:
   push:
@@ -53,9 +62,9 @@ jobs:
           - os: ubuntu-22.04
             asset: linux-x86_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           # 运行时要的是 >=3.9；构建用的解释器随便挑个 PyInstaller 跟得上的版本就行，
           # 别拿 3.9 构建（没必要为下限牺牲构建环境）。
@@ -97,7 +106,7 @@ jobs:
           tar czf "out/mihomo-cli-${TAG}-${{ matrix.asset }}.tar.gz" -C dist/dir mihomo-cli
           cp dist/mihomo-cli "out/mihomo-cli-${TAG}-${{ matrix.asset }}-onefile"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: out/*
@@ -109,7 +118,7 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           merge-multiple: true # 三个平台的文件摊进同一个目录
