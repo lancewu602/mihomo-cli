@@ -78,8 +78,9 @@ reset [--hard]           清空配置：config.yaml 清成最小骨架（顶部�
                          系统代理、删掉订阅缓存；--hard 连工具备份一起删（放弃回滚）。
                          **不新建备份**，靠 mihomo -t 校验 + 内存还原兜底
 
-rule add <类> <域名>…     自定义分流规则：三个文件（一行一个域名）在 ~/.config/mihomo-cli/rules/
-                         下——direct → DIRECT、proxy → 节点选择、reject → REJECT。只收域名
+rule add <类> <域名>…     自定义分流规则：三个文件（`direct.list` / `proxy.list` / `reject.list`，
+                         一行一个域名）在 ~/.config/mihomo-cli/rules/ 下——direct → DIRECT、
+                         proxy → 节点选择、reject → REJECT。只收域名
                          （粘网址 / 带端口 / 大写 / `*.` 都自动归一；IP、关键词、中文域名会被拒
                          并告诉你为什么）。文件也可以直接手改
 rule ls [类]             看三个文件里有什么、config.yaml 那边应用了没（默认动作）

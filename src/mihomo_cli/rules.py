@@ -1,10 +1,10 @@
 """自定义分流规则：三个文件（直连 / 代理 / 拒绝），以及写进 config.yaml 的那一段。
 
-文件放在工具自己的目录里（`~/.config/mihomo-cli/rules/`），一行一个域名：
+文件放在工具自己的目录里（`~/.config/mihomo-cli/rules/`），名字就是三类 + `.list`，一行一个域名：
 
-    rules/direct    example.com     → DOMAIN-SUFFIX,example.com,DIRECT
-    rules/proxy     openai.com      → DOMAIN-SUFFIX,openai.com,节点选择
-    rules/reject    tracker.net     → DOMAIN-SUFFIX,tracker.net,REJECT
+    rules/direct.list   example.com     → DOMAIN-SUFFIX,example.com,DIRECT
+    rules/proxy.list    openai.com      → DOMAIN-SUFFIX,openai.com,节点选择
+    rules/reject.list   tracker.net     → DOMAIN-SUFFIX,tracker.net,REJECT
 
 四个定下来的选择（都有实测依据，改之前先读一遍）：
 
@@ -34,6 +34,7 @@ from pathlib import Path
 from .core import TOOL_DIR, die
 
 RULES_DIR = TOOL_DIR / "rules"  # 三个文件就住这儿，手改也认（只收域名）
+FILE_EXT = ".list"  # 文件名 = 类名 + .list（手改时一眼能看出这是列表文件）
 KINDS = ("direct", "proxy", "reject")  # 顺序就是生成时的顺序、也是 `rule ls` 的顺序
 TARGETS = {
     "direct": "DIRECT",
@@ -51,7 +52,14 @@ _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://")
 
 
 def path_of(kind: str) -> Path:
-    """这一类规则的文件路径。"""
+    """这一类规则的文件路径（`direct` → `direct.list`）。"""
+    return RULES_DIR / f"{kind}{FILE_EXT}"
+
+
+def legacy_path_of(kind: str) -> Path:
+    """加 `.list` 之前的旧文件名（`direct` 这种）。
+
+    只为在 `rule ls` 里提醒一句“旧名字的文件还在、内容没被读”——用户手改过的文件不能默默不管。"""
     return RULES_DIR / kind
 
 

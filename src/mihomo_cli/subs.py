@@ -1495,6 +1495,17 @@ def _rule_ls(args: argparse.Namespace) -> int:
         for line_no, raw, why in bad:
             print(warn(f"⚠ 第 {line_no} 行不会生成规则：{raw} —— {why}"))
 
+    # 加 .list 之前那版写的文件名不带后缀。不自动迁（那是用户的文件），只提醒一句：
+    # 否则升级后“规则凭空没了”会很难查——文件在、内容也在，就是不再被读。
+    for kind in rules.KINDS:
+        if (old := rules.legacy_path_of(kind)).exists():
+            print(
+                warn(
+                    f"⚠ 旧名字的文件还在：{old}（内容没被读，现在认 {rules.path_of(kind)}）\n"
+                    f"   改名就迁过来了：mv {old} {rules.path_of(kind)}"
+                )
+            )
+
     cfg = config_path()
     if not cfg.exists():
         print(warn(f"⚠ 没有 {cfg}（内核那还没配）——三个文件先攒着，有配置了再 rule apply"))

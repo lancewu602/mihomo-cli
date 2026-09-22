@@ -2,12 +2,12 @@
 
 ## 结论
 
-三个文件住在**工具自己的目录**里，一行一个域名：
+三个文件住在**工具自己的目录**里（名字就是三类 + `.list`），一行一个域名：
 
 ```
-~/.config/mihomo-cli/rules/direct    example.com      → DOMAIN-SUFFIX,example.com,DIRECT
-~/.config/mihomo-cli/rules/proxy     openai.com       → DOMAIN-SUFFIX,openai.com,节点选择
-~/.config/mihomo-cli/rules/reject    tracker.net      → DOMAIN-SUFFIX,tracker.net,REJECT
+~/.config/mihomo-cli/rules/direct.list    example.com      → DOMAIN-SUFFIX,example.com,DIRECT
+~/.config/mihomo-cli/rules/proxy.list     openai.com       → DOMAIN-SUFFIX,openai.com,节点选择
+~/.config/mihomo-cli/rules/reject.list    tracker.net      → DOMAIN-SUFFIX,tracker.net,REJECT
 ```
 
 | 命令 | 干什么 | 碰 `config.yaml` 吗 |
@@ -87,7 +87,7 @@ rules:
 | 已在同一个文件里 | 不重复加，提示一句 |
 | 已在**另一个**文件里 | 加上，但提醒：按 `direct → proxy → reject` 的顺序，先命中的那个生效 |
 
-手改文件也行：`#` 注释行和空行会被保留、不生成规则；认不出来的行不会被删，只在 `rule ls` 里报
+手改 `*.list` 也行：`#` 注释行和空行会被保留、不生成规则；认不出来的行不会被删，只在 `rule ls` 里报
 出来（第几行、为什么）。
 
 ## 和骨架（`sub set`）的关系
