@@ -1,6 +1,6 @@
 # mihomo-cli
 
-[![Release](https://img.shields.io/github/v/release/lancewu602/mihomo-cli?color=blue)](https://github.com/lancewu602/mihomo-cli/releases)
+[![Release](https://img.shields.io/github/v/release/lancewu602/mihomo-cli?color=blue&logo=github)](https://github.com/lancewu602/mihomo-cli/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.9-blue.svg)](#环境要求)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#特性)
