@@ -120,6 +120,10 @@
   不装任何东西也可以 `PYTHONPATH=src python3 -m mihomo_cli …`。
 - 开发时接 ruff：`make lint` / `make fmt`，配置在 `pyproject.toml` 的 `[tool.ruff]`
   （运行时依赖仍然是零）。
+- GitHub Actions（`.github/workflows/release.yml`）：推 `v*` tag 自动构建并把资产挂到该 tag 的
+  Release——macOS arm64（`macos-14`）、macOS x86_64（`macos-13`）、Linux x86_64
+  （`ubuntu-22.04`，为 glibc 向下兼容钉住）三类，每类一份目录版 `.tar.gz` 与一份单文件版，
+  外加 `SHA256SUMS`；macOS 那份走 ad-hoc 签名。
 
 **文档**
 

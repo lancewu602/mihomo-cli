@@ -1,0 +1,130 @@
+name: release
+
+# 推 v* tag → 在 macOS（arm64 / x86_64）与 Linux（x86_64）上各出两份二进制，
+# 挂到该 tag 的 Release 上（目录版 tar.gz + 单文件，外加一份 SHA256SUMS）。
+#
+# 手动补发资产（比如 tag 早就打了、当时还没这个 workflow）：
+#   Actions → release → Run workflow → 填已有 Release 的 tag（v0.1.0）
+#
+# 两个平台选择的理由（详见 docs/packaging.md）：
+#   · Linux 固定 ubuntu-22.04：PyInstaller 产物绑构建机的 glibc，越老越能跑新的；
+#     反过来会在更新的机器上报 GLIBC_2.xx not found。Alpine / musl 不行，那是另一套 libc。
+#   · macOS 用 macos-14（Apple Silicon）与 macos-13（Intel）：在哪种架构上构建就得到哪种
+#     二进制，一个文件同时跑两种要 universal2 的 Python + spec 里 target_arch。
+#   · 每个平台都出「目录版 + 单文件」：目录版启动快（默认推荐），单文件好拷贝但每次启动
+#     都要解包（本机 macOS 26 实测 --help 6 秒 vs 0.1 秒，见 docs/packaging.md）。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已有 Release 的 tag（手动补发资产时用；该 Release 不存在会自动创建）"
+        required: true
+        type: string
+        default: "v0.1.0"
+
+permissions:
+  contents: write # gh release create / upload 要写权限
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # tag 推送时 github.event.inputs.tag 是空的，落到 ref_name（就是那个 tag）
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # 一个平台挂了，其余平台的产物照样出
+      matrix:
+        include:
+          - os: macos-14
+            asset: macos-arm64
+          - os: macos-13
+            asset: macos-x86_64
+          - os: ubuntu-22.04
+            asset: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 运行时要的是 >=3.9；构建用的解释器随便挑个 PyInstaller 跟得上的版本就行，
+          # 别拿 3.9 构建（没必要为下限牺牲构建环境）。
+          python-version: "3.12"
+
+      - name: 装 PyInstaller
+        run: python -m pip install --upgrade 'pyinstaller>=6.0'
+
+      # 目录版是默认产物：启动代价只付一次，之后与源码版一样快
+      - name: 构建目录版
+        run: pyinstaller --clean --noconfirm --distpath dist/dir --workpath build/dir mihomo-cli.spec
+        env:
+          MIHOMO_CLI_ONEDIR: "1"
+
+      # 单文件版：好拷贝，代价是每次启动都要把归档解包成新的临时可执行文件
+      - name: 构建单文件版
+        run: pyinstaller --clean --noconfirm --distpath dist --workpath build mihomo-cli.spec
+
+      - name: macOS ad-hoc 签名
+        if: runner.os == 'macOS'
+        # 本地自用不必签名，但挂上去给别人下载会被加 com.apple.quarantine，
+        # 至少 ad-hoc 签一下（正式分发要 Developer ID + 公证，见 docs/packaging.md）。
+        run: |
+          codesign --force --sign - dist/dir/mihomo-cli/mihomo-cli
+          codesign --force --sign - dist/mihomo-cli
+          codesign --verify --verbose=2 dist/dir/mihomo-cli/mihomo-cli
+
+      - name: 冒烟
+        # 目标机器上只有这些二进制、没有 Python，所以这里只验它自己能起来
+        run: |
+          dist/dir/mihomo-cli/mihomo-cli --help > /dev/null
+          dist/mihomo-cli --help > /dev/null
+          file dist/dir/mihomo-cli/mihomo-cli dist/mihomo-cli
+
+      - name: 打包
+        run: |
+          mkdir -p out
+          # 目录版必须整目录打包：只拷那个可执行文件会缺 _internal/，跑不起来
+          tar czf "out/mihomo-cli-${TAG}-${{ matrix.asset }}.tar.gz" -C dist/dir mihomo-cli
+          cp dist/mihomo-cli "out/mihomo-cli-${TAG}-${{ matrix.asset }}-onefile"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: 挂到 Release (${{ github.event.inputs.tag || github.ref_name }})
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true # 三个平台的文件摊进同一个目录
+
+      - name: 生成校验和
+        working-directory: assets
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 上传资产
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Release 通常已经手动建好了（正文取自 CHANGELOG.md）；这里只补资产。
+          # 没有就现建一个，正文用 GitHub 自动生成的（不读 CHANGELOG：这里没 checkout）。
+          gh release view "$TAG" > /dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" assets/* --clobber

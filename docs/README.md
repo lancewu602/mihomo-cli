@@ -36,6 +36,9 @@
   **没有模块清单要维护**。包清单是 `package-dir {"" = "src"}` + `packages = ["mihomo_cli"]`，整个包一起走。
   二进制构建也不用改：`mihomo-cli.spec` 与 `Makefile` 关心的是入口和 `src/mihomo_cli/*.py` 通配。
 - 换了入口函数（`cli.main` 改名之类）：`pyproject.toml` 的 `[project.scripts]` 与 `packaging/entry.py` 一起改。
+- 加/减发布目标平台：改 `.github/workflows/release.yml` 的 `matrix.include`（一行一个平台：
+  `os` + 产物后缀），并同步 `packaging.md` 的「CI 出二进制」那节。注意 Linux 要固定在够老的
+  发行版上构建（glibc 向下兼容），macOS 是「在哪种架构上构建就得到哪种二进制」。
 - 新增对外部命令的依赖（比如又调了个 `ip` / `iptables`）：`packaging.md` 里"二进制里只有这个 CLI"
   那节要补一句——那些命令不会被打进二进制。
 - 包内不要"直接执行某个 .py"来跑入口（相对 import 会失败），要么 `PYTHONPATH=src python3 -m mihomo_cli`，

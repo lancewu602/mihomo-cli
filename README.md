@@ -165,6 +165,12 @@ sudo make install              # 拷到 /usr/local/bin（PREFIX=... 可改）
 都要解包：本机 macOS 26 实测 `--help` 单文件 6 秒 / 目录版 0.1 秒（源码版也是 0.1 秒）。
 两种产物的实测数字、macOS 签名与 Linux glibc 注意事项都在 `docs/packaging.md`。
 
+不想自己装 PyInstaller：每个 `v*` tag 都由 CI 出好现成产物，见
+[Releases](https://github.com/lancewu602/mihomo-cli/releases)——三类目标（macOS arm64 /
+macOS x86_64 / Linux x86_64），每类一份目录版 `.tar.gz` 与一份 `-onefile`，外加
+`SHA256SUMS`。目录版解包后要**整个目录**一起用（可执行文件离开同级的 `_internal/`
+就跑不起来）；macOS 上从浏览器下载的那份先 `xattr -d com.apple.quarantine <文件>`。
+
 ### 本机有 Python 时
 
 ```bash

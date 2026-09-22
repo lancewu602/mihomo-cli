@@ -82,6 +82,40 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 常见 EDR）。在普通 macOS / Linux 上单文件版通常只多 0.2 ~ 0.6 秒的解包时间。要发版就先在
 目标机器上 `time ./mihomo-cli --help` 量一下再决定用哪种产物。
 
+## CI 出二进制（推 tag 自动发）
+
+`.github/workflows/release.yml`：推 `v*` tag 时在三个目标上各构建一次，把产物挂到该 tag
+的 Release 上。之所以要 CI 而不是本机构建：macOS 的两种架构、Linux 对 glibc 的绑定都得
+对应上（「在哪种架构上构建就得到哪种二进制」那条），一台机器出不全。
+
+| 矩阵项 | 产物 |
+|---|---|
+| `macos-14`（Apple Silicon） | `mihomo-cli-<tag>-macos-arm64.tar.gz` + `…-macos-arm64-onefile` |
+| `macos-13`（Intel） | `mihomo-cli-<tag>-macos-x86_64.tar.gz` + `…-macos-x86_64-onefile` |
+| `ubuntu-22.04` | `mihomo-cli-<tag>-linux-x86_64.tar.gz` + `…-linux-x86_64-onefile` |
+
+同一批文件算一份 `SHA256SUMS` 一起传。每个平台都出两种产物：目录版是默认推荐（启动快），
+单文件版好拷贝但每次启动都要解包。
+
+几个约束，改 workflow 前先看：
+
+- **Linux 固定在够老的发行版上构建**（现在钉 `ubuntu-22.04`，glibc 2.35）：产物绑构建机的
+  glibc，越老越能跑新的；反过来会在新机器上报 `GLIBC_2.xx not found`。想在覆盖面上再往下
+  压就换更老的镜像（注意 Debian 12 比 Ubuntu 22.04 **更新**，别选反方向）。
+- **macOS 是「在哪种架构上构建就得到哪种二进制」**，所以要两个 runner。想一个文件同跑两种
+  架构，得用 universal2 的 Python 并把 spec 里 `target_arch` 改成 `"universal2"`。
+- macOS 那份加了 ad-hoc 签名（`codesign --force --sign -`）：本机构建自用不必签，挂上去
+  给别人从浏览器下载会被加 `com.apple.quarantine`。正式分发仍要 Developer ID + 公证。
+- 冒烟只跑 `--help`：runner 上没有 mihomo，`status` 那类要靠外部命令的验不了
+  （目标机器上缺 mihomo / lsof 会给人话报错，不会崩栈）。
+
+手动补发（tag 早打了、当时还没这个 workflow）：Actions → `release` → Run workflow，
+填已有 Release 的 tag。它只往已有 Release 补资产；Release 不存在就现建一个
+（正文走 GitHub 自动生成，因为这一步没 checkout，读不到 `CHANGELOG.md`）。
+
+要加平台就往 `matrix.include` 里加一行（`os` + 产物后缀），Linux arm64 现在是
+`ubuntu-22.04-arm` 这类标签，公开仓库才有。
+
 ## 平台注意
 
 **macOS**
