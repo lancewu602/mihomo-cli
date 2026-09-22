@@ -137,103 +137,76 @@ mihomo-cli status                          # 4. 一屏看状态（不带参数�
 
 ## 命令
 
-每个子命令的开关：`mihomo-cli <命令> --help`。
+下表省略了公共前缀 `mihomo-cli`（写全就是 `mihomo-cli status` 这样）。每个子命令的开关：
+`mihomo-cli <命令> --help`。
 
 ### 内核与系统代理
 
-```
-start                    起内核服务：brew services start mihomo / sudo systemctl start mihomo
-                         起来后确认端口真的在监听；macOS 上再开系统代理（先看网卡选好没）
-                         开完真探测一次（往本地代理端口打 `generate_204`，路由由 rules 决定），
-                         不通就回滚系统代理；
-                         **刚冷启动的十几秒里会多试几次再下结论**——url-test 组那时还抱着
-                         上次选的那个节点（可能已死），内核自己测完才会切到最快的
-                         开代理失败 → 退出码 1（内核在跑，只是没开成，报错里会说）
-stop                     先摘掉系统代理（真开着才摘），再停内核服务；确认端口释放
+| 命令 | 说明 |
+|---|---|
+| `start` | 起内核服务（`brew services` / `systemctl`），等端口就绪；macOS 再开系统代理并真探测一次，不通就回滚（冷启动那十几秒会多试几次） |
+| `stop` | 先摘系统代理（真开着才摘），再停内核服务，确认端口释放 |
+| `nic [网卡名]` | 固定系统代理用哪张网卡（**仅 macOS**）：不给参数看现状，`--reset` 回到跟着活跃网卡走 |
 
-nic [网卡名]            固定系统代理用哪张网卡（**仅 macOS**）：不给参数看现状，
-                         `nic "Wi-Fi"` 固定，`--reset` 回到“跟着活跃网卡走”
-                         不固定就是用当前活跃那张（走默认路由），也是推荐的默认值
-nics                     列网卡（macOS 网络服务与代理开关 / Linux 接口、默认路由、代理变量）
-```
+不固定时就用当前活跃那张（走默认路由），也是推荐的默认值。探测为何要重试、失败为何退出码 1、
+两层之间那两条不变式，见 [docs/lifecycle.md](docs/lifecycle.md)。
 
 ### 订阅
 
-```
-sub set <链接>           设置订阅链接（**只支持一个**）：没设过就写进 config.yaml 的 proxy-providers，
-                         再补一份骨架（只在缺的时候补，你自己的组/规则/设置一律不碰）：
-                         两个组 `节点选择`（select，默认选中自动组）+ `自动选择`（url-test）、
-                         六条分流规则（private / category-ads-all / cn / gfw / 学术 / AI）
-                         + 兜底 `MATCH,DIRECT`（**默认黑名单模式**：只有这几类走代理，其余直连）、
-                         以及九个标量 + 两项嵌套节（`mode` / `log-level` / `ipv6: false` /
-                         `external-controller` / `unified-delay` / `tcp-concurrent` /
-                         `geodata-mode: true` / geodata 自动更新两项，以及两项 `geox-url`
-                         （geosite / geoip 都走 Loyalsoldier/v2ray-rules-dat）、
-                         `profile.store-selected`）；
-                         链接变了就把旧的整块丢掉、新的全量接管，链接没变则一个字节都不改、
-                         只让内核重拉节点（唯一的例外：老配置里缺的全局设置和规则会补上——
-                         只补缺的、**绝不改末尾那条兜底 MATCH**，写一次就安静）；
-                         设置前先自己拉一遍确认链接可用（--force 跳过）
-sub update               更新节点信息：让内核当场重拉（链接不变，不碰配置文件）
-sub show                 看当前订阅：链接、缓存文件、挂在哪个组、内核那边多少节点（默认动作）
-sub nodes [--delay]      列当前订阅的节点：**序号** / 名字 / 类型 / 延迟；`●` 标出当前出口，
-                         --delay 按延迟排（节点数据从内核控制接口读，不解析订阅内容）
-sub use <序号>           指定出口节点（序号就是 sub nodes 里那个，1 开始数）
-sub use --auto           回到自动选择（url-test 挑最快的）
-                         两者都是**运行时**切换（打 PUT /proxies/节点选择），不写 config.yaml；
-                         能活过重启靠骨架里的 `profile: store-selected: true`（内核 ≥ v1.18 的
-                         默认值本来就是 true，这行是显式声明）
+| 命令 | 说明 |
+|---|---|
+| `sub set <链接>` | 设置订阅链接（**只支持一个**）：写进 `config.yaml` 的 `proxy-providers`，节点由内核自己拉。缺的骨架只在缺时补，你写过的组 / 规则 / 设置不碰。`--force` 跳过链接可用性预检 |
+| `sub update` | 让内核当场重拉节点（链接不变，不碰配置文件） |
+| `sub show` | 看订阅：链接、缓存文件、挂在哪个组、节点数（默认动作） |
+| `sub nodes [--delay]` | 列节点：序号 / 名字 / 类型 / 延迟，`●` 标当前出口；`--delay` 按延迟排（数据从控制接口读，不解析订阅内容） |
+| `sub use <序号>` | 切出口节点（序号同 `sub nodes`，从 1 开始） |
+| `sub use --auto` | 回到自动选择（url-test 挑最快的） |
+| `reset [--hard]` | 把 `config.yaml` 清成最小骨架，顺带摘系统代理、删订阅缓存；`--hard` 连工具备份一起删。**不新建备份**，靠 `mihomo -t` 校验 + 内存还原兜底 |
 
-reset [--hard]           清空配置：config.yaml 清成最小骨架（顶部注释 + mixed-port），顺带摘掉
-                         系统代理、删掉订阅缓存；--hard 连工具备份一起删（放弃回滚）。
-                         **不新建备份**，靠 mihomo -t 校验 + 内存还原兜底
-```
+`sub use` 两种形式都是**运行时**切换（`PUT /proxies/节点选择`），不写 `config.yaml`；能活过重启
+靠骨架里的 `profile.store-selected`。骨架里到底补了什么（两个组、六条分流规则、`geox-url`…）见
+[docs/subscription.md](docs/subscription.md)。
 
 ### 自定义分流规则
 
-```
-rule add <类> <域名>…     自定义分流规则：三个文件（`direct.list` / `proxy.list` / `reject.list`，
-                         一行一个域名）在 ~/.config/mihomo-cli/rules/ 下——direct → DIRECT、
-                         proxy → 节点选择、reject → REJECT。只收域名
-                         （粘网址 / 带端口 / 大写 / `*.` 都自动归一；IP、关键词、中文域名会被拒
-                         并告诉你为什么）。文件也可以直接手改
-rule ls [类]             看三个文件里有什么、config.yaml 那边应用了没（默认动作）
-rule rm <类> <域名>…     从文件里删
-rule apply               把三个文件写进 config.yaml 的 rules：**只改标记块那几行**，插在骨架规则
-                         最前面（你的规则优先），末尾那条 MATCH 不动；写盘同样备份 + mihomo -t
-                         + 不过就回滚。add / rm / clear / ls 都不碰 config.yaml，也不用装内核
-rule clear [类]          清空文件（不给类就清三类）；要从配置里也拿掉就再跑一次 rule apply
-rule check <域名>…      这个域名到底走代理 / 直连 / 拒绝：本地按顺序把 rules 走一遍（首次匹配
-                         即生效，跟内核一样），GEOSITE 靠解析内核目录里那份 GeoSite.dat；
-                         判不了的规则（GEOIP / IP-CIDR / RULE-SET / PROCESS-NAME…）会明确
-                         报出来，它们排在前面时结论就不说满。内核在跑时顺带显示当前出口链路
-```
+| 命令 | 说明 |
+|---|---|
+| `rule add <类> <域名>…` | 往三个文件里加域名（`direct.list` / `proxy.list` / `reject.list`，在工具目录下）→ `DIRECT` / `节点选择` / `REJECT`。只收域名：粘网址 / 带端口 / 大写 / `*.` 自动归一，IP、关键词、中文域名会被拒并说明原因 |
+| `rule ls [类]` | 看文件里有什么、`config.yaml` 那边应用了没（默认动作） |
+| `rule rm <类> <域名>…` | 从文件里删 |
+| `rule apply` | 把三个文件写进 `config.yaml` 的 `rules`：**只改标记块那几行**，插在骨架规则前面（你的规则优先），末尾那条 `MATCH` 不动 |
+| `rule clear [类]` | 清空文件（不给类就清三类）；要从配置里也拿掉，再跑一次 `rule apply` |
+| `rule check <域名>…` | 这个域名走代理 / 直连 / 拒绝：本地按顺序把 `rules` 走一遍（首次匹配即生效，跟内核一样）；内核在跑时顺带显示当前出口链路 |
+
+`add` / `rm` / `clear` / `ls` / `check` 都不碰 `config.yaml`，也不用装内核；只有 `apply` 写盘
+（同样「备份 → 写 → `mihomo -t` → 不过就回滚」）。`check` 判不了的规则（GEOIP / IP-CIDR /
+RULE-SET / PROCESS-NAME…）会明确报出来，它们排在前面时结论就不说满。三个文件怎么存、
+那段标记块为什么插在骨架前面，见 [docs/rules.md](docs/rules.md)。
 
 ### 全局设置
 
-```
-config                   全局设置：不给子命令就看现状（config.yaml 里的值 + 内核运行时值，
-                         不一致会标出来）
-config mode <值>         运行模式：rule 按规则分流 / global 全部走 GLOBAL 组 / direct 全部直连
-config log-level <值>    日志级别：silent / error / warning / info / debug（仅控制台与控制页面）
-config allow-lan <值>    允许其他设备经代理端口上网：true / false
-                         **三项都是写 config.yaml + 内核当场生效**（PATCH /configs，不用重启）：
-                         落盘保证重启后还是这个值，PATCH 保证现在这一刻就生效；
-                         allow-lan 会把代理端口从 127.0.0.1 改成绑所有网卡（实测当场就重新绑上），
-                         等于把代理给整个局域网，只在自己信得过的网络里开
-```
+| 命令 | 说明 |
+|---|---|
+| `config` | 看现状：`config.yaml` 里的值 + 内核运行时值，不一致会标出来 |
+| `config mode <值>` | `rule` 按规则分流 / `global` 全部走 GLOBAL 组 / `direct` 全部直连 |
+| `config log-level <值>` | `silent` / `error` / `warning` / `info` / `debug`（仅控制台与控制页面） |
+| `config allow-lan <值>` | `true` / `false`：允许其他设备经代理端口上网。会把代理端口从 `127.0.0.1` 改成**绑所有网卡**（实测当场重新绑上），等于把代理给整个局域网，只在自己信得过的网络里开 |
+
+三项都是**写盘 + `PATCH /configs` 当场生效**（不用重启、不断代理）：落盘保证重启后还是这个值，
+PATCH 保证现在这一刻就生效。见 [docs/control-api.md](docs/control-api.md)。
 
 ### 观测
 
-```
-status                   内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作）
-logs [--truncate]        内核日志在哪、多大、级别；--truncate 清空
-```
+| 命令 | 说明 |
+|---|---|
+| `status` | 内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作） |
+| `nics` | 列网卡：macOS 网络服务与代理开关（`●` 活跃）；Linux 接口 / 默认路由 / 代理变量 |
+| `logs [--truncate]` | 内核日志在哪、多大、级别；`--truncate` 清空 |
 
-除了订阅那一块（`sub set` 写的那套）、`rule` 那套和 `config` 那三项（mode / log-level /
-allow-lan），改 `config.yaml` 的东西（手写规则、geodata、策略组默认选中）都是手工活：本工具只在
-缺的时候补一套默认骨架，你已经写过的那部分一个字节不碰。
-`group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板（`external-controller`）即可。
+除了订阅那一块（`sub set` 写的那套）、`rule` 那套和 `config` 那三项，改 `config.yaml` 的东西
+（手写规则、geodata、策略组默认选中）都是手工活：本工具只在缺的时候补一套默认骨架，你已经写过的
+那部分一个字节不碰。`group` 这类“切完立刻生效、但不写文件”的运行时操作，用 mihomo 自带的控制面板
+（`external-controller`）即可。
 
 ## 平台差异
 
