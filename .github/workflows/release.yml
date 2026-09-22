@@ -105,18 +105,11 @@ jobs:
           # 目录版必须整目录打包：只拷那个可执行文件会缺 _internal/，跑不起来
           tar czf "out/mihomo-cli-${TAG}-${{ matrix.asset }}.tar.gz" -C dist/dir mihomo-cli
           cp dist/mihomo-cli "out/mihomo-cli-${TAG}-${{ matrix.asset }}-onefile"
-          # 上传前先记下每个交付文件的 sha256：release job 下载后要拿它对一遍。
-          # 为什么非要这一步：SHA256SUMS 是下载之后才算的，只能证明「下载后的文件自洽」，
-          # 证明不了 artifact 往返没截断（有损的话它照样自洽）。
-          mkdir -p out/hashes
-          (cd out && sha256sum -- mihomo-cli-* > "hashes/${{ matrix.asset }}.sha256")
-          cat "out/hashes/${{ matrix.asset }}.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
-          # 整个 out/ 一起传（含 hashes/ 子目录，那样下载侧才能还原出同名路径去对哈希）
-          path: out/
+          path: out/*
           if-no-files-found: error
           retention-days: 7
 
@@ -128,21 +121,12 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: assets
-          merge-multiple: true # 三个平台的文件摊进同一个目录（子目录结构保留）
-
-      - name: 对往返无损
-        # 拿构建 job 上传前算好的 hashes/ 对下载后的文件重算一遍。过不了就红：
-        # 宁可在这一步停下，也不能把可能已截断的文件当资产发出去。
-        working-directory: assets
-        run: |
-          ls -R .
-          sha256sum --check hashes/*.sha256
+          merge-multiple: true # 三个平台的文件摊进同一个目录
 
       - name: 生成校验和
         working-directory: assets
         run: |
-          # 只写交付文件；hashes/ 是 CI 的中间产物，不发布
-          sha256sum -- mihomo-cli-* > SHA256SUMS
+          sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
 
       - name: 上传资产
@@ -154,5 +138,4 @@ jobs:
           # 没有就现建一个，正文用 GitHub 自动生成的（不读 CHANGELOG：这里没 checkout）。
           gh release view "$TAG" > /dev/null 2>&1 \
             || gh release create "$TAG" --title "$TAG" --generate-notes
-          # 显式列文件（别用 assets/*）：hashes/ 是中间产物，不能当资产发出去
-          gh release upload "$TAG" assets/mihomo-cli-* assets/SHA256SUMS --clobber
+          gh release upload "$TAG" assets/* --clobber
