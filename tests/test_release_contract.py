@@ -24,7 +24,6 @@ WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 # 换了 runner（比如 macos-16 取代 macos-14）两边都得动，测试会立刻叫一声。
 RUNNERS = {
     "macos-14": ("darwin", "arm64"),
-    "macos-15-intel": ("darwin", "x86_64"),
     "ubuntu-22.04": ("linux", "x86_64"),
 }
 
@@ -73,9 +72,9 @@ class ReleaseContractTest(unittest.TestCase):
     def test_架构叫法归一(self) -> None:
         """同一个架构在各平台上叫法不同（aarch64 / arm64、AMD64 / x86_64），得归一到两种写法。"""
         self.assertEqual(install.asset_suffix("darwin", "aarch64"), "macos-arm64")
-        self.assertEqual(install.asset_suffix("darwin", "AMD64"), "macos-x86_64")
         self.assertEqual(install.asset_suffix("linux", "AMD64"), "linux-x86_64")
         self.assertIsNone(install.asset_suffix("linux", "aarch64"), "linux-arm64 没有产物")
+        self.assertIsNone(install.asset_suffix("darwin", "AMD64"), "macOS x86_64 从 v0.2.2 起不出产物")
 
     def test_tag_归一化(self) -> None:
         """tag 带 v、自报版本不带；比较"要不要更新"之前必须先过这一道。"""

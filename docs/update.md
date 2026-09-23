@@ -70,8 +70,8 @@ doctor                  环境自检：外部命令可不可用、包完不完�
 | 平台 / 架构 | 资产后缀 | 说明 |
 |---|---|---|
 | macOS + arm64 | `macos-arm64` | Apple Silicon |
-| macOS + x86_64 | `macos-x86_64` | Intel |
 | Linux + x86_64 | `linux-x86_64` | |
+| macOS + x86_64 | **没有产物** | Intel Mac：v0.2.2 起不再出，走 uv / 源码 |
 | Linux + aarch64 | **没有产物** | 见下面「这个平台没包时」 |
 
 ```
@@ -106,7 +106,8 @@ tag 从哪来、拿不到时退哪条路、走不走代理、缓多久——都�
 
 ### 这个平台没包时
 
-`linux-arm64` 现在没有产物（CI 矩阵只有三个目标）。这种情况**不能等 404 才说话**：
+`linux-arm64` 与 **`macOS x86_64`（v0.2.2 起不再出）** 都没有产物（CI 矩阵只有两个目标）。
+这种情况**不能等 404 才说话**：
 
 - `upgrade --check` 就该说清"有新版本 vX，但你这个平台没有预编译包"，退出码仍归"有新版"那一档；
 - `upgrade` 则直接给两条能走的路（`uv tool install mihomo-cli` / 源码 + `make install`），

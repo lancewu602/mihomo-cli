@@ -420,6 +420,36 @@ class CacheTest(unittest.TestCase):
         upgrade.write_cache("v0.1.0")  # 比本机旧
         self.assertIsNone(upgrade.cached_newer())
 
+    def test_缓存新鲜也要问网络(self) -> None:
+        """显式命令不许被缓存冒充——发 v0.2.1 时踩到：缓存里是几分钟前的 v0.2.0，
+        `--check` 就说"已是最新"。刚发完版的那一刻恰恰是最想检查的时刻。"""
+        upgrade.write_cache("v0.2.0", "etag-old")
+        fresh = (200, b'{"tag_name": "v0.9.9"}', "etag-new")
+        with mock.patch.object(upgrade, "fetch", return_value=fresh) as spy:
+            tag, from_cache = upgrade.latest_tag()
+        self.assertEqual(tag, "v0.9.9")
+        self.assertFalse(from_cache)
+        spy.assert_called_once()
+        self.assertEqual(upgrade.read_cache()["tag"], "v0.9.9")  # 顺手写回缓存
+
+    def test_网络不通才退回缓存并说明(self) -> None:
+        upgrade.write_cache("v0.2.0", "etag-old")
+        with (
+            mock.patch.object(upgrade, "fetch", side_effect=upgrade.UpgradeError("超时")),
+            mock.patch.object(upgrade, "_redirect_tag", side_effect=upgrade.UpgradeError("也超时")),
+        ):
+            tag, from_cache = upgrade.latest_tag()
+        self.assertEqual(tag, "v0.2.0")
+        self.assertTrue(from_cache)
+
+    def test_网络不通且没缓存就报错(self) -> None:
+        with (
+            mock.patch.object(upgrade, "fetch", side_effect=upgrade.UpgradeError("超时")),
+            mock.patch.object(upgrade, "_redirect_tag", side_effect=upgrade.UpgradeError("也超时")),
+            self.assertRaises(upgrade.UpgradeError),
+        ):
+            upgrade.latest_tag()
+
     def test_status_不因缓存过期去联网(self) -> None:
         """过期就该当不知道——`status` 一下网络请求都不许发。"""
         upgrade.write_cache("v0.3.0")

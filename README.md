@@ -81,10 +81,11 @@ sudo make install              # 装到 /usr/local（PREFIX=... 可改，见下�
 两种产物的实测数字、macOS 签名与 Linux glibc 注意事项都在 `docs/packaging.md`。
 
 不想自己装 PyInstaller：每个 `v*` tag 都由 CI 出好现成产物，见
-[Releases](https://github.com/lancewu602/mihomo-cli/releases)——三类目标（macOS arm64 /
-macOS x86_64 / Linux x86_64），每类一份目录版 `.tar.gz` 与一份 `-onefile`，外加
+[Releases](https://github.com/lancewu602/mihomo-cli/releases)——两类目标（macOS arm64 /
+Linux x86_64），每类一份目录版 `.tar.gz` 与一份 `-onefile`，外加
 `SHA256SUMS`。目录版解包后要**整个目录**一起用（可执行文件离开同级的 `_internal/`
 就跑不起来）；macOS 上从浏览器下载的那份先 `xattr -d com.apple.quarantine <文件>`。
+（Intel Mac 没有预编译包：`upgrade` 会明确告诉你，并给出 `uv tool install` / 源码两条路。）
 
 ### Python 包管理器
 

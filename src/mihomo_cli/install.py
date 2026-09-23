@@ -92,9 +92,10 @@ def version_line() -> str:
 
 # (平台, 架构) → 资产后缀。这张表与 .github/workflows/release.yml 的 matrix.asset 是同一个约定，
 # 两边对不上就是 404——`tests/test_release_contract.py` 会读那个文件核对。
+# 从 v0.2.2 起不再出 macOS x86_64（Intel）产物：那种机器上 `asset_suffix()` 返回 None，
+# `upgrade` 会说"本平台没有预编译包"并给出 uv / 源码两条路，而不是拼一个必 404 的名字。
 ASSET_SUFFIXES = {
     ("macos", "arm64"): "macos-arm64",
-    ("macos", "x86_64"): "macos-x86_64",
     ("linux", "x86_64"): "linux-x86_64",
 }
 PLATFORM_NAMES = {"darwin": "macos", "linux": "linux"}

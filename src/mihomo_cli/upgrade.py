@@ -169,22 +169,24 @@ def _redirect_tag() -> str:
     raise UpgradeError("没有跳转（这个仓库有 Release 吗？）")
 
 
-def latest_tag(*, ttl: float = CACHE_TTL) -> tuple[str, bool]:
-    """最新 tag（带 `v`），以及这个值是不是从缓存来的。
+def latest_tag() -> tuple[str, bool]:
+    """最新 tag（带 `v`），以及这个值是不是**退而用缓存**得到的。
 
-    顺序：缓存还新鲜就用缓存 → API（带 ETag，命中 304 连配额都不耗）→ 免费的 302 兜底
-    → 都失败但手上有旧缓存就凑合用它（并说明），否则报错。
+    **显式命令（`upgrade` / `--check`）永远问网络。** 缓存是给 `status` 的被动提示用的，
+    不能让一个 6 小时前的结论冒充"现在最新"。这个坑是发 v0.2.1 时踩到的：机器上
+    `--check` 还说"已是最新"，因为缓存里是几分钟前查到的 v0.2.0——**刚发完版的那一刻恰恰
+    是最想检查的时刻**，那时候骗人最要命。
+
+    ETag 仍然带上（命中 304 连配额都不耗）；真查不通时才退回缓存并说明。
     """
     cache = read_cache()
     cached = str(cache.get("tag") or "")
-    if cached and cache_fresh(cache, ttl=ttl):
-        return cached, True
     etag = str(cache.get("etag") or "") or None
     try:
         status, body, new_etag = fetch(LATEST_API, etag=etag)
         if status == 304 and cached:
             write_cache(cached, etag or "")
-            return cached, True
+            return cached, False
         tag = str(json.loads(body)["tag_name"])
     except (UpgradeError, KeyError, ValueError, TypeError) as api_err:
         try:
@@ -524,7 +526,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     else:
         tag, from_cache = latest_tag()
     if not is_newer(install.normalize_tag(tag), __version__) and not args.tag:
-        print(ok(f"✓ 已是最新（{tag}）") + dim(f"  检查于{'缓存' if from_cache else '刚刚'}"))
+        origin = "（网络没通，用的是上次的结果）" if from_cache else ""
+        print(ok(f"✓ 已是最新（{tag}）") + dim(f"  {origin}"))
         return 0
 
     if kind not in (install.FROZEN_DIR, install.FROZEN_ONE):
@@ -613,7 +616,7 @@ def _check(kind: str) -> int:
         print(bad(f"✗ {e}"), file=sys.stderr)
         return 1
     newer = is_newer(install.normalize_tag(tag), __version__)
-    print(f"最新版本  {tag}" + dim("（缓存）" if from_cache else ""))
+    print(f"最新版本  {tag}" + dim("（网络没通，用的是上次的结果）" if from_cache else ""))
     print(f"本机版本  {__version__}（{install.kind_label(kind)}）")
     if not newer:
         print(ok("✓ 已是最新"))

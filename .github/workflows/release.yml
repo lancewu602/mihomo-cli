@@ -1,18 +1,21 @@
 name: release
 
-# 推 v* tag → 在 macOS（arm64 / x86_64）与 Linux（x86_64）上各出两份二进制，
+# 推 v* tag → 在 macOS（arm64）与 Linux（x86_64）上各出两份二进制，
 # 挂到该 tag 的 Release 上（目录版 tar.gz + 单文件，外加一份 SHA256SUMS）。
 #
 # 手动补发资产（比如 tag 早就打了、当时还没这个 workflow）：
 #   Actions → release → Run workflow → 填已有 Release 的 tag（v0.1.0）
 #
-# 两个平台选择的理由（详见 docs/packaging.md）：
+# 平台选择的理由（详见 docs/packaging.md）：
 #   · Linux 固定 ubuntu-22.04：PyInstaller 产物绑构建机的 glibc，越老越能跑新的；
 #     反过来会在更新的机器上报 GLIBC_2.xx not found。Alpine / musl 不行，那是另一套 libc。
-#   · macOS 用 macos-14（Apple Silicon）与 macos-15-intel（Intel）：在哪种架构上构建就得到
-#     哪种二进制，一个文件同时跑两种要 universal2 的 Python + spec 里 target_arch。
-#     旧标签 macos-13 已于 2025-12-04 退役（用它只会永远排队，不报错）；macos-15-intel
-#     是 Intel 的接替标签，官方说保留到 2027-08。
+#   · macOS 用 macos-14（Apple Silicon）：在哪种架构上构建就得到哪种二进制，一个文件同时跑
+#     两种要 universal2 的 Python + spec 里 target_arch。
+#     **不再出 Intel（x86_64）产物**（v0.2.2 起）：矩阵里去掉 macos-15-intel 就行，
+#     CLI 那边的 ASSET_SUFFIXES 必须同步去掉——两边是靠 tests/test_release_contract.py
+#     绑住的，只改一边会让契约测试当场失败（这是故意的）。Intel Mac 不是不能用：
+#     `upgrade` 会明确说"本平台没有预编译包"，并给出 uv tool install / 源码两条路。
+#     历史：旧标签 macos-13 已于 2025-12-04 退役（用它只会永远排队，不报错）。
 #   · 每个平台都出「目录版 + 单文件」：目录版启动快（默认推荐），单文件好拷贝但每次启动
 #     都要解包（本机 macOS 26 实测 --help 6 秒 vs 0.1 秒，见 docs/packaging.md）。
 #
@@ -86,8 +89,6 @@ jobs:
         include:
           - os: macos-14
             asset: macos-arm64
-          - os: macos-15-intel
-            asset: macos-x86_64
           - os: ubuntu-22.04
             asset: linux-x86_64
     steps:
