@@ -5,6 +5,7 @@
     core         地基：常量、目录/可执行文件探测、跑外部命令、读 config.yaml、调控制接口
     install      安装形态与资产名：这份工具是怎么装的、本平台该取哪个包（`--version` / `upgrade` 用）
     doctor       自检：外部命令还能不能被正常调用、包完不完整（冻结版出怪事先跑它）
+    upgrade      自更新：取包（查 tag / 下载 / 校验）+ 换包（staging / 自检 / symlink 原子切换）
     kernel       内核观测：进程 / 端口 / 服务状态（只读）/ 控制接口读 / 出口链路 / 连通性探测
     logs         内核日志：写到哪、多大、怎么清空
     systemproxy  系统代理：macOS networksetup 的开关、原状态保存与还原、选哪张网卡

@@ -45,7 +45,8 @@ config.yaml 清成最小骨架，并摘掉系统代理、删订阅缓存（--har
 
 子命令的开关看 `mihomo-cli <命令> --help`。
 
-数据都在 ~/.config/mihomo-cli（state.json 与改配置前的备份；MIHOMO_CLI_DIR 可覆盖）；
+数据都在 ~/.config/mihomo-cli（state.json 与改配置前的备份、update-check.json 那份"查到的最新版"、
+upgrade.lock 升级锁、upgrade/ 下载缓存；MIHOMO_CLI_DIR 可覆盖）；
 内核配置目录自动探测 ~/.config/mihomo、/etc/mihomo、/opt/homebrew/etc/mihomo…（MIHOMO_DIR 可覆盖）。
 零第三方依赖，只用标准库；内核由 brew services / systemd 常驻，本工具不自己 fork 进程。
 
@@ -69,6 +70,7 @@ from .rules import KINDS as RULE_KINDS
 from .service import cmd_start, cmd_stop
 from .status import cmd_status
 from .subs import cmd_reset, cmd_rule, cmd_sub
+from .upgrade import cmd_upgrade
 
 RULE_KIND = "{" + ",".join(RULE_KINDS) + "}"
 
@@ -93,6 +95,7 @@ SUBCOMMANDS = {
     ),
     "status": ("查看当前状态（默认）", cmd_status),
     "doctor": ("自检：外部命令能不能正常调用、包完不完整（冻结版出怪事先跑它）", cmd_doctor),
+    "upgrade": ("自更新：查最新版 → 下载校验自检 → 原子切换（--check 只看 / --rollback 回退）", cmd_upgrade),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics"}
@@ -120,7 +123,7 @@ RULE_NEEDS_KERNEL = {"apply"}
 def _needs_kernel(args: argparse.Namespace) -> bool:
     """这个命令要不要内核可执行文件。
 
-    四条例外，它们跟内核可执行文件一毛钱关系没有：
+    五条例外，它们跟内核可执行文件一毛钱关系没有：
       nics / nic       只看网卡（macOS 的 networksetup / Linux 的 /sys + /proc）
       stop             停服务靠 brew services / systemctl，不经过那个可执行文件；而且它是
                        **安全动作**：内核被卸载/挪走之后服务可能还挂着、系统代理可能还指着
@@ -128,10 +131,11 @@ def _needs_kernel(args: argparse.Namespace) -> bool:
                        后面，等于把出口锁上。
       doctor           它报的就是"外部命令能不能用"，自己先被内核挡住就本末倒置了——
                        内核没装/没跑正是它该如实报出来的情况之一。
+      upgrade          换的是本工具自己的二进制，跟内核无关（装/卸内核都不该影响它）。
 
     （start 仍归下面那道检查管：它要读 config 的端口、起来了还要拿 mihomo 去开代理。）
     """
-    if args.action in ("nics", "nic", "stop", "doctor"):
+    if args.action in ("nics", "nic", "stop", "doctor", "upgrade"):
         return False
     if args.action == "sub":
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL
@@ -273,6 +277,22 @@ def _main(argv: list[str] | None = None) -> int:
             rk.add_argument("domain", nargs="+", metavar="域名", help="一个或多个域名")
             rc = rsub.add_parser("clear", help="清空文件（不给类就清三类）")
             rc.add_argument("kind", nargs="?", choices=RULE_KINDS, metavar=RULE_KIND)
+        if fn is cmd_upgrade:
+            p.add_argument(
+                "tag", nargs="?", metavar="tag", help="指定版本（降级 / 钉住，比如 v0.1.0）"
+            )
+            p.add_argument("--check", action="store_true", help="只查有没有新版，一个字节都不改")
+            p.add_argument("--rollback", action="store_true", help="切回保留着的上一版（不联网）")
+            p.add_argument("--sha256", metavar="哈希", help="钉死包的校验和（离线 / 审计场景）")
+            p.add_argument("--prefix", metavar="目录", help="显式指定安装前缀（默认从自己在哪推）")
+            p.add_argument(
+                "--keep", type=int, default=2, metavar="N", help="保留几个版本（默认 2：当前 + 前一个）"
+            )
+            p.add_argument(
+                "--cache",
+                metavar="目录",
+                help="换个下载缓存目录（非 root 先下好、再用 sudo 跑时要带上它）",
+            )
         if fn is cmd_reset:
             p.add_argument(
                 "--hard",

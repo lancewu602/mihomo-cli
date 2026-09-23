@@ -68,8 +68,13 @@
 ```bash
 git clone git@github.com:lancewu602/mihomo-cli.git && cd mihomo-cli
 make deps && make build        # → dist/dir/mihomo-cli/mihomo-cli
-sudo make install              # 拷到 /usr/local/bin（PREFIX=... 可改）
+sudo make install              # 装到 /usr/local（PREFIX=... 可改，见下）
 ```
+
+`make install` 装出来的布局和自更新用的是**同一套**：实体在 `/usr/local/libexec/mihomo-cli-<版本>/`，
+`/usr/local/libexec/mihomo-cli` 是指向它的 symlink，`/usr/local/bin/mihomo-cli` 是个两行的 exec
+包装脚本。多这一层 symlink 是为了 **切版本能原子完成**（`os.replace` 换个 symlink）且能回滚；
+装完就能用 `mihomo-cli upgrade` 换版本、`--rollback` 退回去。
 
 `make build-onefile` 出单文件版（8.3 MB，好拷贝）；默认给的是目录版，因为单文件每次启动
 都要解包：本机 macOS 26 实测 `--help` 单文件 6 秒 / 目录版 0.1 秒（源码版也是 0.1 秒）。
@@ -201,6 +206,10 @@ PATCH 保证现在这一刻就生效。见 [docs/control-api.md](docs/control-ap
 那是合法状态）。有硬失败时退出码非 0。
 
 `--version` 报出版本、**安装形态**（二进制目录版 / 单文件版、pip、uv tool、源码 checkout）与自身路径。
+
+`upgrade` 把上面这些接起来：二进制版能自更新（查最新 tag → 下载 → 校验 → 自检 → 原子切换），
+`--check` 只看、`--rollback` 退回上一版；pip / uv / 源码装的一律只报正确的命令（不替你覆盖
+site-packages，也不替你做 `git pull`）。设计与取舍见 [docs/update.md](docs/update.md)。
 
 除了订阅那一块（`sub set` 写的那套）、`rule` 那套和 `config` 那三项，改 `config.yaml` 的东西
 （手写规则、geodata、策略组默认选中）都是手工活：本工具只在缺的时候补一套默认骨架，你已经写过的

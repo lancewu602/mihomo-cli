@@ -43,8 +43,13 @@ make build                # → dist/dir/mihomo-cli/mihomo-cli（目录版，默
 make build-onefile        # → dist/mihomo-cli（单文件）
 make check                # --help + file + 体积 +（本机有 mihomo 时）status 冒烟
 make lint                 # ruff check（开发时用；代码风格约定见 docs/README.md）
-sudo make install         # 拷到 /usr/local/bin（PREFIX=... 可改）
+sudo make install         # 装到 /usr/local（PREFIX=... 可改）
 ```
+
+`make install` / `make uninstall` 跟着自更新那套布局走（实体 `libexec/mihomo-cli-<版本>/` +
+一个 symlink + `bin` 里的 exec 包装），装完就能用 `mihomo-cli upgrade` 换版本；
+若 `libexec/mihomo-cli` 是旧布局的真目录，`make install` 也会先把它留成
+`mihomo-cli-legacy-<日期>` 快照（与 `upgrade` 的迁移一致）。
 
 不想用 make，两条命令等价：
 

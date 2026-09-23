@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import platform
 import sys
 from pathlib import Path
@@ -134,3 +135,103 @@ def release_sums_url(tag: str) -> str:
 def normalize_tag(tag: str) -> str:
     """把 tag 归一成版本号（`v0.2.0` → `0.2.0`），比较"要不要更新"时必须先过这一道。"""
     return tag[1:] if tag.startswith("v") else tag
+
+
+# ─────────────────────────── 装到哪、怎么换 ───────────────────────────
+
+# 布局（详见 docs/update.md）：
+#   <prefix>/bin/mihomo-cli                       包装脚本（内容与版本无关，两种形态共用）
+#   <prefix>/libexec/mihomo-cli  → mihomo-cli-<版本>   ← 切换的就是这个 symlink（rename 原子）
+#   <prefix>/libexec/mihomo-cli-<版本>[/]          目录版是目录（含 _internal/），单文件版是文件
+LIBEXEC = "libexec"
+CURRENT = "mihomo-cli"
+ENTRY_PREFIX = "mihomo-cli-"
+STAGING_PREFIX = ".staging-"
+LEGACY_PREFIX = "mihomo-cli-legacy-"
+
+
+def wrapper_path(prefix: Path) -> Path:
+    return prefix / "bin" / "mihomo-cli"
+
+
+def current_entry(prefix: Path) -> Path:
+    """切换用的那个 symlink（指向某个版本入口）。"""
+    return prefix / LIBEXEC / CURRENT
+
+
+def version_entry(prefix: Path, version: str) -> Path:
+    return prefix / LIBEXEC / f"{ENTRY_PREFIX}{version}"
+
+
+def wrapper_text(current: Path) -> str:
+    """包装脚本的内容：**与版本无关**，所以老布局那份留着也是对的，不用每次重写。
+
+    它 exec 的是上面那个 symlink（而不是某个版本目录），于是一次 `os.replace` 就能换掉整个版本。
+    """
+    return f'#!/bin/sh\nexec {current}/mihomo-cli "$@"\n'
+
+
+def find_prefix(exe: Path | None = None, kind: str | None = None) -> Path | None:
+    """从自己所在的位置推出安装前缀。**只认本设计那套布局，推不出来就返回 None**
+    （比如有人把二进制丢进 ~/bin）——那种情况下 `upgrade` 不猜，直接给手工步骤。"""
+    exe = (exe or Path(sys.executable)).resolve()
+    kind = kind or install_kind()
+    parent = exe.parent
+    if kind == FROZEN_ONE:  # 可执行文件本身就是 <prefix>/libexec/mihomo-cli-<版本>
+        if parent.name == LIBEXEC and exe.name.startswith(ENTRY_PREFIX):
+            return parent.parent
+        return None
+    if parent.parent.name == LIBEXEC and parent.name.startswith(ENTRY_PREFIX):  # 目录版
+        return parent.parent.parent
+    if parent.parent.name == LIBEXEC and parent.name == CURRENT:  # 迁移前的旧布局
+        return parent.parent.parent
+    return None
+
+
+def entry_version(name: str) -> str | None:
+    """入口目录名 → 版本号。`mihomo-cli-legacy-20260923` 返回 None——它没有版本可言
+    （迁移时旧的那份自报不出自己是谁，见 docs/update.md 的「迁移」）。"""
+    if not name.startswith(ENTRY_PREFIX) or name.startswith(LEGACY_PREFIX):
+        return None
+    version = name[len(ENTRY_PREFIX) :]
+    return version or None
+
+
+def entries(prefix: Path) -> list[Path]:
+    """libexec 里所有已安装的版本入口（版本目录 + legacy 快照，不含 staging 与那个 symlink）。"""
+    libexec = prefix / LIBEXEC
+    if not libexec.is_dir():
+        return []
+    return sorted(
+        p
+        for p in libexec.iterdir()
+        if p.name.startswith(ENTRY_PREFIX) and not p.name.startswith(STAGING_PREFIX)
+    )
+
+
+def is_legacy_layout(prefix: Path) -> bool:
+    """`libexec/mihomo-cli` 是**真目录**（不是 symlink）——迁移前那套。"""
+    current = current_entry(prefix)
+    return current.is_dir() and not current.is_symlink()
+
+
+def current_target(prefix: Path) -> Path | None:
+    """那个 symlink 现在指向哪个入口。"""
+    current = current_entry(prefix)
+    if not current.is_symlink():
+        return None
+    target = (current.parent / os.readlink(current)).resolve()
+    return target if target.exists() else None
+
+
+def stale(entries_list: list[Path], *, keep: int, protect: tuple[Path, ...] = ()) -> list[Path]:
+    """该删哪几个——纯函数，好测。
+
+    规则：按 mtime 从新到旧，保留前 `keep` 个；`protect` 里的（正在跑的那份）额外保住；
+    **`legacy-*` 永不自动删**（那是迁移前的原样快照，只能手删）。
+    一条硬约束：**永不删正在跑的那份**——它还可能懒加载 `_internal` 里的 `.so`。
+    """
+    ordered = sorted(entries_list, key=lambda p: p.stat().st_mtime, reverse=True)
+    protected = {q.resolve() for q in protect}
+    keep_set = set(ordered[:keep]) | {p for p in ordered if p.resolve() in protected}
+    return [p for p in ordered if p not in keep_set and entry_version(p.name) is not None]

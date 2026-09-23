@@ -28,6 +28,7 @@ from .core import (
 from .kernel import current_node, mihomo_pid, probe, service_status
 from .logs import find_log_file
 from .systemproxy import active_service, list_services, proxy_states
+from .upgrade import cached_newer
 
 
 def cmd_status(_: argparse.Namespace) -> int:
@@ -60,6 +61,30 @@ def cmd_status(_: argparse.Namespace) -> int:
 
     def line(label: str, value: str) -> None:
         print(f"  {pad(label, 12)} {value}")
+
+    def update_line() -> None:
+        """有新版本时顺带提一句。
+
+        **这里一个字节的网络请求都不发**——只读 `upgrade` 落下的缓存（TTL 内才算数）。
+        `status` 是最常敲的命令，网一断就卡 15 s 是最不能接受的；缓存过期就当作不知道。
+        """
+        if tag := cached_newer():
+            line("更新", dim(f"有新版本 {tag}（mihomo-cli upgrade）"))
+
+    def tail() -> None:
+        """两个平台的**公共收尾**：日志 / 当前出口 / 连通性 / 更新提示。
+
+        收尾只许有这一处。先前它在两个平台分支里各写了一份，我给 macOS 那份加了"更新提示"，
+        Linux 那份就漏了——在 Mac 上怎么测都对，拿到 Linux 上跑才发现那行根本不打印。
+        同一段代码写两遍，早晚只改一边。
+        """
+        log_line()
+        if node := current_node():
+            chain, delay = node
+            lat = f"{delay}ms" if delay else dim("无延迟数据")
+            line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
+        conn_line()
+        update_line()
 
     def log_line() -> None:
         """日志那行：内核在往哪写、写了多少——静态信息，看一眼就好。"""
@@ -134,12 +159,7 @@ def cmd_status(_: argparse.Namespace) -> int:
 
     if not IS_MACOS:
         line("系统代理", dim("macOS 专用（networksetup），本机不适用"))
-        log_line()
-        if node := current_node():
-            chain, delay = node
-            lat = f"{delay}ms" if delay else dim("无延迟数据")
-            line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
-        conn_line()
+        tail()
         return 0
 
     # 哪些网卡上真的开着代理。没有活跃网卡时，这是唯一能看的东西。
@@ -170,12 +190,5 @@ def cmd_status(_: argparse.Namespace) -> int:
                 warn("还开着代理：" + "、".join(others) + "（mihomo-cli stop 会先摘代理）"),
             )
 
-    log_line()
-
-    if node := current_node():
-        chain, delay = node
-        lat = f"{delay}ms" if delay else dim("无延迟数据")
-        line("当前出口", f"{' → '.join(chain)}  {dim(lat)}")
-
-    conn_line()
+    tail()
     return 0

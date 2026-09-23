@@ -8,7 +8,8 @@
 #   make build-onefile  单文件：dist/mihomo-cli（就一个文件，但每次启动都要解包）
 #   make check          跑一遍产物（--help；本机装了 mihomo 时顺带 status）
 #                       make check BIN=dist/mihomo-cli 可以单独验单文件那份
-#   make install        装到 $(PREFIX)/bin（默认 /usr/local；目录版会整目录装 + 放个 exec 包装）
+#   make install        装到 $(PREFIX)（默认 /usr/local）：版本化目录 + symlink + bin 里的包装脚本
+#                       布局与自更新一致，装完就能用 mihomo-cli upgrade 换版本
 #   make uninstall      从 $(PREFIX) 移除
 #   make clean          删掉 build/ 与 dist/
 #
@@ -18,7 +19,13 @@
 # 两个平台命令完全一样；平台差异（架构、glibc、签名）也在那篇里。
 
 PREFIX ?= /usr/local
-LIBEXEC = $(PREFIX)/libexec/mihomo-cli
+LIBEXEC = $(PREFIX)/libexec
+# 版本号从代码里读（唯一真源是 src/mihomo_cli/_version.py），于是 make install 装出来的布局和
+# 自更新（mihomo-cli upgrade）用的是同一套：<前缀>/libexec/mihomo-cli-<版本> + 一个 symlink。
+VERSION = $(shell PYTHONPATH=src python3 -c "import mihomo_cli; print(mihomo_cli.__version__)" 2>/dev/null)
+ENTRY   = $(LIBEXEC)/mihomo-cli-$(VERSION)
+CURRENT = $(LIBEXEC)/mihomo-cli
+WRAPPER = $(PREFIX)/bin/mihomo-cli
 VENV   ?= .venv
 DIST   ?= dist
 BUILD  ?= build
@@ -73,26 +80,36 @@ check:
 		|| echo "  status 冒烟：跳过（本机没装 mihomo，或内核没在跑）"
 
 # 装哪个由 BIN 决定（默认目录版）。目录版**必须整目录装**：那个 2 MB 的可执行文件
-# 要和同目录的 _internal/ 一起才跑得起来，单独拷出去会报找不到 Python 运行时。
-# 所以目录版装到 $(PREFIX)/libexec/mihomo-cli/，bin 里放一个两行的 exec 包装脚本。
+# 要和同目录的 _internal/ 一起才跑得起来，单独拷出去会报找不到 Python 运行时。所以两种产物都装成
+# 版本化入口（目录版是目录、单文件版是文件），再让 <前缀>/libexec/mihomo-cli 指向它。
+# 为什么多这一层 symlink：切版本时 os.replace 换个 symlink 是原子的，原地覆盖则有一段
+# "目录恰好不在"的窗口（实测 27 ms(Linux)/104 ms(macOS)，窗口内调用 100% 失败）。详见 docs/update.md。
 install:
 	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-onefile）"; exit 1; }
-	@mkdir -p $(PREFIX)/bin
-	@if [ "$(BIN)" = "$(ONEDIR)" ]; then \
-		rm -rf $(LIBEXEC) && mkdir -p $(LIBEXEC) && \
-		cp -R $(dir $(ONEDIR)). $(LIBEXEC)/ && \
-		printf '#!/bin/sh\nexec %s/mihomo-cli "$$@"\n' "$(LIBEXEC)" > $(PREFIX)/bin/mihomo-cli && \
-		chmod 0755 $(PREFIX)/bin/mihomo-cli && \
-		echo "已装到 $(PREFIX)/bin/mihomo-cli（实体在 $(LIBEXEC)/）"; \
-	else \
-		install -m 0755 $(BIN) $(PREFIX)/bin/mihomo-cli && \
-		echo "已装到 $(PREFIX)/bin/mihomo-cli"; \
+	@test -n "$(VERSION)" || { echo "读不出版本号（src/mihomo_cli/_version.py？）"; exit 1; }
+	@mkdir -p $(PREFIX)/bin $(LIBEXEC)
+	@if [ -d "$(CURRENT)" ] && [ ! -L "$(CURRENT)" ]; then \
+		mv "$(CURRENT)" "$(LIBEXEC)/mihomo-cli-legacy-$$(date +%Y%m%d)" && \
+		echo "旧布局已留成 mihomo-cli-legacy-$$(date +%Y%m%d)"; \
 	fi
+	@rm -rf $(ENTRY)
+	@if [ "$(BIN)" = "$(ONEDIR)" ]; then \
+		mkdir -p $(ENTRY) && cp -R $(dir $(ONEDIR)). $(ENTRY)/ ; \
+	else \
+		install -m 0755 $(BIN) $(ENTRY) ; \
+	fi
+	@ln -sfn mihomo-cli-$(VERSION) $(CURRENT)
+	@printf '#!/bin/sh\nexec %s/mihomo-cli "$$@"\n' "$(CURRENT)" > $(WRAPPER)
+	@chmod 0755 $(WRAPPER)
+	@echo "已装 $(WRAPPER)（实体 $(ENTRY)）"
+	@echo "  回滚 / 切换：mihomo-cli upgrade --rollback"
 
 uninstall:
-	rm -f $(PREFIX)/bin/mihomo-cli
-	rm -rf $(LIBEXEC)
-	@echo "已从 $(PREFIX) 移除"
+	rm -f $(WRAPPER)
+	rm -f $(CURRENT)
+	rm -rf $(LIBEXEC)/mihomo-cli-*
+	rm -rf $(LIBEXEC)/.staging-*
+	@echo "已从 $(PREFIX) 移除（含所有版本与 legacy 快照）"
 
 clean:
 	rm -rf $(BUILD) $(DIST)
