@@ -61,6 +61,7 @@ import sys
 
 from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
+from .doctor import cmd_doctor
 from .install import version_line
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
@@ -91,6 +92,7 @@ SUBCOMMANDS = {
         cmd_config,
     ),
     "status": ("查看当前状态（默认）", cmd_status),
+    "doctor": ("自检：外部命令能不能正常调用、包完不完整（冻结版出怪事先跑它）", cmd_doctor),
 }
 # 旧名字继续能用：services 是 macOS 的说法，list/ls 顺手
 ALIASES = {"services": "nics", "list": "nics", "ls": "nics"}
@@ -118,16 +120,18 @@ RULE_NEEDS_KERNEL = {"apply"}
 def _needs_kernel(args: argparse.Namespace) -> bool:
     """这个命令要不要内核可执行文件。
 
-    三条例外，它们跟内核可执行文件一毛钱关系没有：
+    四条例外，它们跟内核可执行文件一毛钱关系没有：
       nics / nic       只看网卡（macOS 的 networksetup / Linux 的 /sys + /proc）
       stop             停服务靠 brew services / systemctl，不经过那个可执行文件；而且它是
                        **安全动作**：内核被卸载/挪走之后服务可能还挂着、系统代理可能还指着
                        死端口（整机断网），这时正需要它救场。把安全出口挡在"找不到 mihomo"
                        后面，等于把出口锁上。
+      doctor           它报的就是"外部命令能不能用"，自己先被内核挡住就本末倒置了——
+                       内核没装/没跑正是它该如实报出来的情况之一。
 
     （start 仍归下面那道检查管：它要读 config 的端口、起来了还要拿 mihomo 去开代理。）
     """
-    if args.action in ("nics", "nic", "stop"):
+    if args.action in ("nics", "nic", "stop", "doctor"):
         return False
     if args.action == "sub":
         return getattr(args, "sub_action", None) in SUB_NEEDS_KERNEL

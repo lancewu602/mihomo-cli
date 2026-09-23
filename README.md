@@ -191,8 +191,16 @@ PATCH 保证现在这一刻就生效。见 [docs/control-api.md](docs/control-ap
 | 命令 | 说明 |
 |---|---|
 | `status` | 内核 / 服务 / 端口 / 控制接口 / 系统代理 / 日志 / 出口 / 连通性（默认动作） |
+| `doctor` | 自检：外部命令（systemctl / journalctl / lsof / ss / 内核）还能不能被正常调用、包完不完整 |
 | `nics` | 列网卡：macOS 网络服务与代理开关（`●` 活跃）；Linux 接口 / 默认路由 / 代理变量 |
 | `logs [--truncate]` | 内核日志在哪、多大、级别；`--truncate` 清空 |
+
+`doctor` 是为**冻结版**准备的那道闸：二进制的故障往往不是崩，而是“能起但不能干活”——
+`--help` 跑得通、退出码还是 0，只是说出来的话是假的。它因此真去调那几个外部命令，
+并且只看**输出是否为空**、不看返回码（`systemctl is-active` 在服务没跑时是 `rc=3` + `inactive`，
+那是合法状态）。有硬失败时退出码非 0。
+
+`--version` 报出版本、**安装形态**（二进制目录版 / 单文件版、pip、uv tool、源码 checkout）与自身路径。
 
 除了订阅那一块（`sub set` 写的那套）、`rule` 那套和 `config` 那三项，改 `config.yaml` 的东西
 （手写规则、geodata、策略组默认选中）都是手工活：本工具只在缺的时候补一套默认骨架，你已经写过的

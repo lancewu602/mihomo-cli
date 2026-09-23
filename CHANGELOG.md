@@ -15,6 +15,13 @@
 - 版本号有了**唯一真源**：`src/mihomo_cli/_version.py`。`pyproject.toml` 改成 `dynamic` +
   `{attr = "mihomo_cli._version.__version__"}`（构建期静态解析，不 import 包），于是 pip / uv /
   PyInstaller / CI 四条路读到的是同一个值——写两处就会出现"装的是 A、自报是 B"。
+- `doctor`：环境自检。真去调 `systemctl` / `journalctl` / `lsof` / `ss` / 内核，而不是只跑
+  `--help`——冻结版的故障是"能起但不能干活"（`--help` 通、退出码 0，只是说出来的话是假的）。
+  判据有两条反直觉的，都是在真机上量出来的：`--version` 这类要把 **stderr 也算作输出**
+  （`lsof -v` 在 Debian 13 上把版本打在 stderr、stdout 空，只看 stdout 会把正常工具判成故障）；
+  `systemctl is-active` 这类**只看 stdout 非空、忽略返回码**（服务没跑 rc=3，连不存在的 unit 都是
+  rc=4，两者都打 `inactive`——返回码在这里是"答案"不是"成败"）。
+  "命令不存在"只 warn，"存在但调用坏/输出空"才是硬失败（退出码非 0，`upgrade` 据此拒绝切换）。
 - CI 两道闸：**tag 必须等于 `__version__`**（`v0.2.0` ↔ `0.2.0`），以及**资产名必须与 CLI 拼出来的
   一致**（资产名是 CLI 与 CI 之间的隐含约定，对不上不会在本地报错，而是发布之后才发现的 404）。
 
