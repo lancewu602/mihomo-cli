@@ -6,6 +6,16 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。每一项都写「对外行为变了什么」，
 而不是「改了哪个文件」——设计取舍与取舍背后的理由在 `docs/` 里。
 
+## [未发布]
+
+### 修复
+
+- **回滚到老版本时，提示不再说空话**。`--rollback` 滚回 0.2.0 之前的老版本后，`upgrade` 这个
+  子命令**本身就不存在了**（老版本没它），而原提示还说"再跑一次 --rollback 能切回"——
+  照它敲下去得到的是 `invalid choice: 'upgrade'`。现在 `_rollback()` 会先探一下目标认不认
+  `upgrade`，不认就给逃生口：`/usr/local/libexec/mihomo-cli-<新版本>/mihomo-cli upgrade
+  --rollback`。这个洞是真机验收（滚到 v0.1.1 快照再想切回来）时才暴露的。
+
 ## [0.2.0] - 2026-09-23
 
 ### 新增

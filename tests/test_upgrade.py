@@ -12,7 +12,9 @@ sh 脚本，装成 tar.gz），然后走 staging → 自检 → symlink 原子�
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -295,6 +297,33 @@ class SwapTest(unittest.TestCase):
         self.assertEqual(upgrade._rollback(install.FROZEN_DIR, self.prefix), 0)
         self.assertEqual(self._target(), self._entry("0.2.1"))
 
+    def test_回滚到老版本时提示怎么切回来(self) -> None:
+        """滚回 0.2.0 之前的老版本后，`upgrade` 这个命令本身就不存在了——
+        "再跑一次 --rollback" 是句空话（真机验收时照那句敲下去，得到的是 invalid choice）。
+        这时必须给出"按路径直接调另一份"的逃生口。"""
+        self._legacy_install()
+        self._apply("v0.1.0", make_package(self.tmp, "0.1.0", script=OLD_BIN))  # 老版本
+        self._apply("v0.2.0", make_package(self.tmp, "0.2.0"))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = upgrade._rollback(install.FROZEN_DIR, self.prefix)
+        text = out.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("老版本", text)
+        self.assertIn("0.2.0", text)  # 提示里得带能救命的那条路径
+        self.assertNotIn("再跑一次", text)
+
+    def test_两份都认_upgrade_时才说再跑一次(self) -> None:
+        self._legacy_install()
+        self._apply("v0.2.0", make_package(self.tmp, "0.2.0"))
+        self._apply("v0.2.1", make_package(self.tmp, "0.2.1"))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            upgrade._rollback(install.FROZEN_DIR, self.prefix)
+        self.assertIn("再跑一次", out.getvalue())
+
     def test_切完还能按保留策略清旧版(self) -> None:
         self._legacy_install()
         for version in ("0.1.0", "0.2.0", "0.2.1"):
@@ -313,9 +342,6 @@ class SwapTest(unittest.TestCase):
         """
         self._legacy_install()
         blob = make_package(self.tmp, "0.2.0")
-        import contextlib
-        import io
-
         out = io.StringIO()
         with (
             mock.patch.object(upgrade, "download", return_value=blob),

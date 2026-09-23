@@ -626,6 +626,16 @@ def _check(kind: str) -> int:
     return CHECK_NEWER
 
 
+def supports_upgrade(exe: Path) -> bool:
+    """这份二进制认不认 `upgrade`。
+
+    回滚时靠它决定怎么提示：滚回 0.2.0 **之前**的老版本后，那个子命令本身就不存在了（老版本
+    没有它），"再跑一次 --rollback" 就是句空话——得告诉人按路径直接调另一份。
+    这个坑是真机验收时踩到的：照文档那句敲下去，得到的是 `invalid choice: 'upgrade'`。
+    """
+    return run(str(exe), "upgrade", "--help").returncode == 0
+
+
 def _rollback(kind: str, prefix: Path | None) -> int:
     """切回保留着的上一版：**不联网**，切完顺手确认切过去那份能起来。"""
     if kind not in (install.FROZEN_DIR, install.FROZEN_ONE) or prefix is None:
@@ -641,9 +651,14 @@ def _rollback(kind: str, prefix: Path | None) -> int:
     target = max(others, key=lambda p: p.stat().st_mtime)
     switch(prefix, target)
     ensure_wrapper(prefix)
-    good, message = smoke(entry_exe(target), None)
+    case = entry_exe(target)
+    good, message = smoke(case, None)
     print(f"{ok('✓') if good else warn('⚠')} 已切回 {target.name}")
     print(dim(f"  {message}"))
     if current is not None:
-        print(dim(f"  再跑一次 --rollback 能切回 {current.name}"))
+        if supports_upgrade(case):
+            print(dim(f"  再跑一次 --rollback 能切回 {current.name}"))
+        else:
+            print(warn(f"  ⚠ {target.name} 是老版本，它自己没有 upgrade 命令。要切回来按路径直接调："))
+            print(f"    {entry_exe(current)} upgrade --rollback")
     return 0 if good else 1
