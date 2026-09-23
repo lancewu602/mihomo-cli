@@ -3,6 +3,7 @@
 #   make deps           建 .venv 并装 PyInstaller + ruff（一次性；也可以直接用 PATH 上的）
 #   make lint           ruff check（只检查）
 #   make fmt            ruff format + ruff check --fix（会重排代码，见 docs/README.md 的约定）
+#   make test           跑单元测试（stdlib unittest，零依赖、不装 pytest）
 #   make build          目录版：dist/dir/mihomo-cli/mihomo-cli  ← 默认，启动快
 #   make build-onefile  单文件：dist/mihomo-cli（就一个文件，但每次启动都要解包）
 #   make check          跑一遍产物（--help；本机装了 mihomo 时顺带 status）
@@ -35,7 +36,7 @@ RUFF ?= $(shell if [ -x $(VENV)/bin/ruff ]; then echo $(VENV)/bin/ruff; \
                  elif command -v ruff >/dev/null 2>&1; then echo ruff; \
                  else echo "uvx ruff"; fi)
 
-.PHONY: build build-onefile deps lint fmt check install uninstall clean
+.PHONY: build build-onefile deps lint fmt test check install uninstall clean
 
 build: $(ONEDIR)
 build-onefile: $(ONEFILE)
@@ -53,6 +54,11 @@ deps:
 
 lint:
 	$(RUFF) check .
+
+# 测试是 stdlib unittest：运行时零依赖这个底线连开发期也不想破，所以不引 pytest。
+# src 布局下包不在仓库根，得靠 PYTHONPATH 指路（也因此测的就是源码，不是装好的那份）。
+test:
+	PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 fmt:
 	$(RUFF) format .

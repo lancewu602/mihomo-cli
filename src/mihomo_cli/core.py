@@ -196,10 +196,54 @@ def die(msg: str) -> NoReturn:
 # ─────────────────────────── 底层命令封装 ───────────────────────────
 
 
+# 冻结后要替子进程摘掉的环境变量：PyInstaller 的 bootloader 把包内目录塞进这些变量，
+# 好让打包进去的 Python 运行时能被找到（Linux 是 LD_LIBRARY_PATH，macOS 是 DYLD_LIBRARY_PATH）。
+_LIB_PATH_VARS = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH")
+
+
+def _child_env() -> dict[str, str] | None:
+    """跑外部命令时给子进程的环境；不冻结时返回 None（等于不动，直接继承）。
+
+    为什么非洗不可：那些变量**子进程也会继承**，于是包里的库会抢在系统库前面被加载。包里那份
+    `libcrypto.so.3` 是构建机（ubuntu-22.04）上带出来的 OpenSSL，链接器会优先用它；而依赖
+    systemd 共享库的命令要求更新的符号版本，于是统统加载失败——Debian 13 上实测：
+
+        systemctl is-active mihomo
+        → systemctl: .../_internal/libcrypto.so.3: version `OPENSSL_3.4.0' not found
+          (required by /usr/lib/x86_64-linux-gnu/systemd/libsystemd-shared-257.so)
+
+    它是 rc=1 + **stdout 为空**退出的，症状极隐蔽：`kernel.service_status()` 拿到空串只能归到
+    unknown → 运行中的内核被报成「已停止」，`start` / `stop` 则完全失效（带上一个看不懂的链接器
+    报错）。同一个坑也埋着 `journalctl`（status 那行的「整机 469.4M」直接消失）。
+
+    只摘掉指向包内目录的条目：用户自己设的路径原样保留；一条不剩时把变量整个删掉——留个空字符串
+    语义并不等价（glibc 眼里空项是「当前目录」）。
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    bundle = getattr(sys, "_MEIPASS", None)  # onedir 指 _internal/，onefile 指解包出的临时目录
+    if not bundle:
+        return None
+    env = os.environ.copy()
+    for var in _LIB_PATH_VARS:
+        raw = env.get(var)
+        if raw is None:
+            continue
+        kept = [p for p in raw.split(os.pathsep) if p and not p.startswith(str(bundle))]
+        if kept:
+            env[var] = os.pathsep.join(kept)
+        else:
+            del env[var]
+    return env
+
+
 def run(*cmd: str) -> subprocess.CompletedProcess:
-    """跑一个外部命令。命令不存在时返回 returncode=127 的空结果，**不抛异常**。"""
+    """跑一个外部命令。命令不存在时返回 returncode=127 的空结果，**不抛异常**。
+
+    子进程走 _child_env() 洗过的环境，原因见那里。
+    """
     try:
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, env=_child_env())
     except FileNotFoundError:
         return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: command not found")
 

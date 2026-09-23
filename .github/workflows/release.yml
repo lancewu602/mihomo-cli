@@ -48,8 +48,25 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # 构建前先过一道源码层的测试（make test 那套）。它挡的是“源码逻辑”那一层，比如子进程环境
+  # 该不该洗；二进制自己的行为它测不到——冻结后的毛病只在目标机器上现形，
+  # 见 docs/packaging.md 的「怎么验」。
+  test:
+    name: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 跑单元测试
+        run: PYTHONPATH=src python3 -m unittest discover -s tests -v
+
   build:
     name: build (${{ matrix.asset }})
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false # 一个平台挂了，其余平台的产物照样出

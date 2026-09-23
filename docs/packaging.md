@@ -97,6 +97,10 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 同一批文件算一份 `SHA256SUMS` 一起传。每个平台都出两种产物：目录版是默认推荐（启动快），
 单文件版好拷贝但每次启动都要解包。
 
+构建之前先过一道 `test` job（`make test` 跑的那套，stdlib unittest）：它挡的是“源码逻辑”那一层，
+比如子进程环境该不该洗。**二进制自己的行为它测不到**（冻结后的毛病要目标机器才现形），
+所以上面「怎么验」里那条冻结版检查每次换版本都值得手跑一遍。
+
 几个约束，改 workflow 前先看：
 
 - **Linux 固定在够老的发行版上构建**（现在钉 `ubuntu-22.04`，glibc 2.35）：产物绑构建机的
@@ -137,6 +141,15 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 - **glibc 绑定**：PyInstaller 产物依赖构建机的 glibc 版本，**要在你能接受的最低发行版上构建**
   （比如 Debian 12 / Ubuntu 22.04 上构建，拿去更新的机器能跑；反过来会报
   `GLIBC_2.xx not found`）。跨发行版分发时这条最容易踩。
+- **构建机还会从另一个口子漏进目标机器：`LD_LIBRARY_PATH`（v0.1.1 修）**。bootloader 把
+  `<bundle>/_internal` 塞进 `LD_LIBRARY_PATH`（macOS 是 `DYLD_LIBRARY_PATH`），**子进程也继承**
+  ——于是包里那份来自构建机的 `libcrypto.so.3` 会抢在系统库前被加载。Debian 13 上实测：
+  `systemctl is-active mihomo` 报 `version \`OPENSSL_3.4.0' not found (required by
+  libsystemd-shared-257.so)`、以 rc=1 + **空 stdout** 退出。症状极其隐蔽：内核明明在跑，
+  `status` 却报「内核服务 已停止」，`start` / `stop` 彻底失效（只剩一句看不懂的链接器报错）。
+  现在由 `core._child_env()` 给子进程摘掉指向包内目录的条目。
+  **换更新的构建机治不了这个病**：Ubuntu 24.04 的 openssl 仍是 3.0.13，照样缺 `OPENSSL_3.4.0`
+  （Debian 13 是 3.5），别往“把构建机升级一下”那个方向修。
 - **不需要 C 编译器**：PyInstaller 用的是预编译 bootloader（这点和 Nuitka 不一样，Nuitka 要 gcc）。
 - **Alpine / musl 不行**：那是另一套 libc，得用 musl 版 Python 重打或换方案。
 - 目录版同样要整目录分发。
@@ -155,7 +168,9 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 
 | 当时的顾虑 | 核对结果 |
 |---|---|
-| 一堆外部命令（mihomo / lsof / brew / systemctl） | 不是问题：都是按名字调 PATH，二进制不含也不该含它们 |
+| 一堆外部命令（mihomo / lsof / brew / systemctl） | 不是问题：都是按名字调 PATH，二进制不含也不该含它们——**但子进程的环境会被包带歪，见下一行** |
+| 子进程会不会被包里的库劫持 | **真踩了**（v0.1.1 修）：bootloader 塞的 `LD_LIBRARY_PATH` 让 `systemctl`
+  / `journalctl` 加载了包内的 `libcrypto.so.3` 而失败；详见「平台注意 · Linux」第二条 |
 | `sys.executable` 在冻结后不再指向 python | 代码里根本没用到（grep 无） |
 | 资源文件路径（`__file__`） | 没有（grep 无），`datas=[]` 就够 |
 | 启动开销 | 目录版与源码版持平；单文件版看环境，见「实测」 |
@@ -216,4 +231,16 @@ cp -R dist/dir/mihomo-cli /tmp/x && /tmp/x/mihomo-cli --help
 
 # 本机源码版回归
 PYTHONPATH=src python3 -m mihomo_cli status | head -4
+```
+
+**冻结版最该盯的是「子进程有没有被包里的库带歪」**（它只在运行时、只在目标机器上才现形）：
+
+```bash
+# 内核服务在跑时，「内核服务」那行必须是「已启动」，日志行要有 journald 占用数字。
+# 报「已停止」而 systemctl is-active mihomo 明明说 active —— 就是又被污染了。
+mihomo-cli status
+
+# 想单独看一眼污染源，在装了冻结版的目标机器上：
+LD_LIBRARY_PATH=/usr/local/libexec/mihomo-cli/_internal systemctl is-active mihomo
+#   → 正常应打印 active；若报 OPENSSL_3.4.0 not found，说明该版本的 _child_env() 没生效
 ```

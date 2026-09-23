@@ -8,6 +8,24 @@
 
 ## [未发布]
 
+## [0.1.1] - 2026-09-23
+
+### 修复
+
+- **冻结成二进制后，所有外部命令不再被包里的库劫持**。PyInstaller 的 bootloader 会把
+  `<bundle>/_internal` 塞进 `LD_LIBRARY_PATH`（macOS 是 `DYLD_LIBRARY_PATH`），**子进程也继承**，
+  于是包里那份来自构建机的 `libcrypto.so.3` 抢在系统库前面被加载。在 Debian 13 上，依赖 systemd
+  共享库的命令会因此加载失败（缺 `OPENSSL_3.4.0` 符号版本）并以 rc=1 + **空 stdout** 退出。
+  实际后果是一串看着莫名其妙的症状：内核明明在跑，`status` 却报「内核服务 已停止」，
+  `start` / `stop` / `restart` 彻底失效（只剩一句链接器报错），`logs` 找不到日志位置，
+  `status` 的日志行丢掉 journald 占用数字。`run()` 现在会给子进程洗干净这份环境：只摘掉指向
+  包内目录的条目，用户自己设的 `LD_LIBRARY_PATH` 原样保留。**源码方式运行不受此 bug 影响。**
+
+### 新增
+
+- `make test`：单元测试（stdlib `unittest`，零第三方依赖，不引 pytest）。目前覆盖子进程环境的
+  清洗取舍，含「洗过的环境必须真被 `run()` 接上」这一条。
+
 ## [0.1.0] - 2026-09-22
 
 首个发版。一句话说清它是什么：**管 mihomo（Clash.Meta 内核）的命令行工具**，

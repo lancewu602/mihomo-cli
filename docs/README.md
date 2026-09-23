@@ -25,6 +25,9 @@
 
 - **改完代码跑 `make lint`**（ruff check，配置在 `pyproject.toml` 的 `[tool.ruff]`）。
   ruff 只在开发时用（`make deps` 装进 .venv，或直接 `uvx ruff`），运行时依赖仍然是零。
+- **跑 `make test`**（测试在 `tests/`，stdlib `unittest`）：零依赖这条底线连开发期也不想破，
+  所以不引 pytest。src 布局下靠 `PYTHONPATH=src` 指路，测的就是源码那份。
+  测试写不写只看一条：**这条结论以后被改坏了，能不能自动叫一声**。纯盘算与文案不必兜。
 - `make fmt` = `ruff format` + `ruff check --fix`，**会重排代码**，两个已知代价是接受了的：
   行内注释的列对齐被压成两个空格（ruff format 没有开关能保留），以及中文长行会被折行。
   所以：**跑过 fmt 之后，`control-api.md` 里那些 `文件:行号` 引用要重新对一遍**（格式化会

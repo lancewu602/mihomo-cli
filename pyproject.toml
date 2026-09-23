@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mihomo-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "管 mihomo（Clash.Meta 内核）的命令行工具：系统代理、内核与出口观测、日志、网卡"
 readme = "README.md"
 license = "MIT"
