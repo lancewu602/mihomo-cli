@@ -39,7 +39,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import __version__, install
-from .core import HOST, TOOL_DIR, bad, die, dim, listener, ok, proxy_port, run, warn
+from .core import HOST, TOOL_DIR, bad, die, dim, listener, ok, proxy_port, run, size_str, warn
 
 CHECK_NEWER = 10  # --check 专属：有新版（与"失败"的 1 分开，脚本能分辨）
 CACHE_TTL = 6 * 3600.0  # 查最新 tag 的缓存有效期（未认证 GitHub API 是 60 次/小时/IP）
@@ -258,6 +258,7 @@ def download(
         return blob
 
     print(dim(f"  取包 {asset}" + ("（有本机代理，先走它）" if listener(proxy_port()) else "")))
+    started = time.monotonic()
     _, body, _ = fetch(install.release_asset_url(tag, asset), prefer_proxy=True)
     if not body:
         raise UpgradeError(f"资产是空的：{asset}")
@@ -269,6 +270,8 @@ def download(
             f"校验不过，下载的包已删掉。\n  期望 {want}\n  实际 {got}\n"
             f"  这只说明下载/传输坏了——SHA256SUMS 与包同源，防不了源被改（见 docs/update.md）"
         )
+    # 大小 / 耗时 / 校验结果一起报：涓流卡死那种情况下，这行是唯一能看出端倪的东西
+    print(dim(f"  ✓ 下载 {size_str(len(body))}（{time.monotonic() - started:.1f} s），SHA256 校验通过"))
     return blob
 
 

@@ -13,4 +13,4 @@ docs/update.md 的「取包 · 三个坑」。
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
