@@ -525,7 +525,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         return 0
 
     if kind not in (install.FROZEN_DIR, install.FROZEN_ONE):
-        print(dim(f"你是{install.kind_label(kind)}的，本工具不替换自己那一份。请用："))
+        print(dim(f"你是「{install.kind_label(kind)}」形态的，本工具不替换自己那一份。请用："))
         print(f"  {handoff(kind)}")
         return 0
     if prefix is None:
