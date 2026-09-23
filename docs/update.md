@@ -465,16 +465,25 @@ print(repr(p.stdout), repr(p.stderr[:80]))"
 #    调用端与切换端必须放两个独立进程，否则 GIL 会让数据失真
 ```
 
-## 实现时要同步改的地方
+## 落地情况（2026-09-23，v0.2.0）
 
-这套东西会改到外部行为，按 docs/README.md 的维护约定，落地时要一起改：
+设计里的东西已按 docs/README.md 的维护约定同步落地，清单如下（免得下次还要猜哪些做了）：
 
-- `README.md` 的「命令」节：加 `upgrade`（含 `--check` / `<tag>` / `--rollback` / `--sha256`）
-  与 `doctor` 两个分组项，以及 `--version`。
-- `Makefile`：`install` / `uninstall` 跟着换成版本化布局（`libexec/mihomo-cli-<ver>` + symlink），
-  否则 `make install` 装出来的东西和自我更新的布局不一致。
-- `mihomo-cli.spec` / `.github/workflows/release.yml`：CI 加两道闸——"tag == `__version__`"
-  以及"资产名与 CLI 那张表对齐"（见「取包 · 契约闸门」）。
-- 新增 `TOOL_DIR` 下的文件（`update-check.json` / `upgrade.lock` / `upgrade/`）已经记在
-  `cli.py` 的模块说明里（那里列了工具数据都住哪）。
-- 本文件加进 `docs/README.md` 那张表（"要动 `upgrade` / `doctor`、改发布流程时看"）。
+- `README.md`：「命令」节加了 `upgrade` 与 `doctor`，`--version` 也写了；安装节说明新布局。
+- `Makefile`：`install` / `uninstall` 换成版本化布局（`libexec/mihomo-cli-<版本>` + symlink +
+  `bin` 里的包装），旧布局的真目录会先留成 `legacy-<日期>` 快照——与 `upgrade` 的迁移一致。
+- `.github/workflows/release.yml`：两道闸已加（tag 必须等于 `__version__`；发布 job 里拿 CLI 自己的
+  函数算出资产名与 `out/` 里的文件反查），另有 `tests/test_release_contract.py` 查反方向。
+- `TOOL_DIR` 新增的文件（`update-check.json` / `upgrade.lock` / `upgrade/`）记在 `cli.py`
+  的模块说明里（那里列了工具数据都住哪）。
+- 本文件已加进 `docs/README.md` 那张表。
+
+**还差一步（按「鸡生蛋」那节，只能手工）**：v0.2.0 本身得先手工装到目标机器上，
+那之后该机器才能自更新。引导用的是新二进制自己的迁移路径：
+
+```bash
+# 在一台还装着旧版（或根本没装）的机器上，把 v0.2.0 解到任意临时目录，然后：
+/tmp/new/mihomo-cli upgrade v0.2.0 --prefix /usr/local
+#   → 它会自己完成：暂存 → doctor 自检 → 装成 libexec/mihomo-cli-0.2.0 → 旧目录留成 legacy-<日期>
+#      → 原子切换 symlink → 写包装脚本；之后 mihomo-cli upgrade 就能用了
+```
