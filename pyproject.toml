@@ -4,7 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mihomo-cli"
-version = "0.1.1"
+# 版本号不写在这里：写在这儿就会出现"装的是 A、自报是 B"（CI 的 tag 闸门只查得到其中一个）。
+# 唯一真源是 src/mihomo_cli/_version.py，下面 [tool.setuptools.dynamic] 静态解析它——
+# 构建期不 import 包，pip / uv / PyInstaller / CI 四条路读到的是同一个值。
+# 发版规矩：tag = `v` + 那个值（CI 会拦）。
+dynamic = ["version"]
 description = "管 mihomo（Clash.Meta 内核）的命令行工具：系统代理、内核与出口观测、日志、网卡"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +43,9 @@ mihomo-cli = "mihomo_cli.cli:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = ["mihomo_cli"]
+
+[tool.setuptools.dynamic]
+version = {attr = "mihomo_cli._version.__version__"}
 
 # 文档跟着包走：装到 <前缀>/share/doc/mihomo-cli/。
 # 分两个键是故意的：data-files 会扁平化，docs/README.md 跟仓库 README.md 同名，

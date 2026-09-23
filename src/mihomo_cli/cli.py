@@ -61,6 +61,7 @@ import sys
 
 from .config import BOOLS, LOG_LEVELS, MODES, cmd_config
 from .core import IS_MACOS, MIHOMO_BIN, MIHOMO_BIN_CANDIDATES, die
+from .install import version_line
 from .logs import cmd_logs
 from .nics import cmd_nic, cmd_nics
 from .rules import KINDS as RULE_KINDS
@@ -185,6 +186,11 @@ def _main(argv: list[str] | None = None) -> int:
         ),
     )
     sub = parser.add_subparsers(dest="action")
+    # `--version` 报三样：版本、安装形态、自身路径。后两样是给 issue 用的——"这是哪一版、
+    # 怎么装的"决定了更新走的哪条路（见 docs/update.md 的「辨认安装形态」）。
+    parser.add_argument(
+        "--version", action="version", version=version_line(), help="看版本、安装形态与自身路径"
+    )
     for name, (help_text, fn) in SUBCOMMANDS.items():
         aliases = sorted(a for a, target in ALIASES.items() if target == name)
         p = sub.add_parser(name, help=help_text, aliases=aliases)

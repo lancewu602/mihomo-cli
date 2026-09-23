@@ -64,6 +64,18 @@ jobs:
       - name: 跑单元测试
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 
+      - name: tag 必须等于 __version__
+        # 这道闸防的是已经吃过的一次亏：v0.1.0 带着 bug 发出去，事后没人能从二进制里问出
+        # "这是哪一版"，只能靠文件时间戳猜。
+        run: |
+          v=$(PYTHONPATH=src python3 -c "import mihomo_cli; print(mihomo_cli.__version__)")
+          if [ "v$v" != "$TAG" ]; then
+            echo "✗ tag=$TAG，但代码里的 __version__=$v（应满足 tag = v<version>）"
+            echo "  改版本号就同步改 src/mihomo_cli/_version.py，或者用匹配得上的 tag 重发"
+            exit 1
+          fi
+          echo "✓ tag 与 __version__ 一致：$TAG"
+
   build:
     name: build (${{ matrix.asset }})
     needs: test
@@ -122,6 +134,20 @@ jobs:
           # 目录版必须整目录打包：只拷那个可执行文件会缺 _internal/，跑不起来
           tar czf "out/mihomo-cli-${TAG}-${{ matrix.asset }}.tar.gz" -C dist/dir mihomo-cli
           cp dist/mihomo-cli "out/mihomo-cli-${TAG}-${{ matrix.asset }}-onefile"
+
+      - name: 资产名要和 CLI 拼出来的一致
+        # 那张表在 CLI 里一份、在本文件的 matrix.asset 里一份。对不上不会在本地报错，
+        # 而是发布之后才发现的 404。tests/test_release_contract.py 查反方向（CLI 认得、
+        # CI 不产出的平台），这里查正方向（产出的文件真能被 CLI 算出来）。
+        run: |
+          want=$(PYTHONPATH=src python3 -c "from mihomo_cli.install import asset_names; print(' '.join(asset_names('$TAG', '${{ matrix.asset }}')))")
+          echo "CLI 预期：$want"
+          for f in $want; do
+            test -f "out/$f" || { echo "✗ CLI 预期 $f，out/ 里没有"; ls -la out; exit 1; }
+          done
+          n=$(ls out | wc -l)
+          [ "$n" -eq 2 ] || { echo "✗ out/ 里应该只有 2 个文件，实际 $n 个"; ls out; exit 1; }
+          echo "✓ 资产名一致：$(ls out | tr '\n' ' ')"
 
       - uses: actions/upload-artifact@v7
         with:

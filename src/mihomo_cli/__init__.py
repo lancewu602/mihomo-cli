@@ -3,6 +3,7 @@
 模块分工（依赖是单向的：上层可以 import 下层，下层不许回头 import 上层）：
 
     core         地基：常量、目录/可执行文件探测、跑外部命令、读 config.yaml、调控制接口
+    install      安装形态与资产名：这份工具是怎么装的、本平台该取哪个包（`--version` / `upgrade` 用）
     kernel       内核观测：进程 / 端口 / 服务状态（只读）/ 控制接口读 / 出口链路 / 连通性探测
     logs         内核日志：写到哪、多大、怎么清空
     systemproxy  系统代理：macOS networksetup 的开关、原状态保存与还原、选哪张网卡
@@ -31,3 +32,7 @@
 包在 `src/` 下是故意的（src 布局）：仓库根不是 import 根，所以“在仓库里能跑”
 必然是装好的那份，打包漏文件藏不住。代价是本地跑要带 `PYTHONPATH=src`。
 """
+
+from ._version import __version__
+
+__all__ = ["__version__"]

@@ -8,6 +8,16 @@
 
 ## [未发布]
 
+### 新增
+
+- `--version`：报出版本、**安装形态**（二进制目录版 / 单文件版、pip、uv tool、源码 checkout）
+  与自身路径。三样都在一行里：报问题时它们最省事，而且决定了更新该走哪条路（见 docs/update.md）。
+- 版本号有了**唯一真源**：`src/mihomo_cli/_version.py`。`pyproject.toml` 改成 `dynamic` +
+  `{attr = "mihomo_cli._version.__version__"}`（构建期静态解析，不 import 包），于是 pip / uv /
+  PyInstaller / CI 四条路读到的是同一个值——写两处就会出现"装的是 A、自报是 B"。
+- CI 两道闸：**tag 必须等于 `__version__`**（`v0.2.0` ↔ `0.2.0`），以及**资产名必须与 CLI 拼出来的
+  一致**（资产名是 CLI 与 CI 之间的隐含约定，对不上不会在本地报错，而是发布之后才发现的 404）。
+
 ## [0.1.1] - 2026-09-23
 
 ### 修复
