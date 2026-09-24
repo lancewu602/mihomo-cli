@@ -117,7 +117,7 @@ class SmokeTest(unittest.TestCase):
         self.assertIn("0.2.1", msg)
 
     def test_自报版本与_tag_不符要拦住(self) -> None:
-        good, msg = upgrade.smoke(self._script(FAKE_BIN), "v0.3.0")
+        good, msg = upgrade.smoke(self._script(FAKE_BIN), "v0.9.9")
         self.assertFalse(good)
         self.assertIn("不符", msg)
 
@@ -275,7 +275,7 @@ class SwapTest(unittest.TestCase):
         self._legacy_install()
         blob = make_package(self.tmp, "0.2.0")  # 包里自报 0.2.0
         with self.assertRaises(SystemExit):
-            self._apply("v0.3.0", blob)  # 但 tag 说是 0.3.0
+            self._apply("v0.9.9", blob)  # 但 tag 说是 0.9.9
         self.assertFalse(install.current_entry(self.prefix).is_symlink())
 
     def test_装老版本降级自检但照样装上(self) -> None:
@@ -378,10 +378,10 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(self._check("v0.1.1"), 0)
 
     def test_有新版退出_10(self) -> None:
-        self.assertEqual(self._check("v0.3.0"), upgrade.CHECK_NEWER)
+        self.assertEqual(self._check("v0.9.9"), upgrade.CHECK_NEWER)
 
     def test_本平台没包也算有新版(self) -> None:
-        self.assertEqual(self._check("v0.3.0", suffix=None), upgrade.CHECK_NEWER)
+        self.assertEqual(self._check("v0.9.9", suffix=None), upgrade.CHECK_NEWER)
 
     def test_查不动退出_1(self) -> None:
         with mock.patch.object(upgrade, "latest_tag", side_effect=upgrade.UpgradeError("网断了")):
@@ -399,12 +399,12 @@ class CacheTest(unittest.TestCase):
         mock.patch.object(upgrade, "CHECK_CACHE", self.cache).start()
 
     def test_写读一轮(self) -> None:
-        upgrade.write_cache("v0.3.0", "etag-1")
-        self.assertEqual(upgrade.read_cache()["tag"], "v0.3.0")
+        upgrade.write_cache("v0.9.9", "etag-1")
+        self.assertEqual(upgrade.read_cache()["tag"], "v0.9.9")
         self.assertTrue(upgrade.cache_fresh(upgrade.read_cache()))
 
     def test_过期就不算新鲜(self) -> None:
-        upgrade.write_cache("v0.3.0")
+        upgrade.write_cache("v0.9.9")
         old = json.loads(self.cache.read_text())
         old["checked_at"] = time.time() - upgrade.CACHE_TTL - 1
         self.cache.write_text(json.dumps(old))
@@ -415,8 +415,8 @@ class CacheTest(unittest.TestCase):
         self.assertEqual(upgrade.read_cache(), {})
 
     def test_status_只在缓存新鲜且真有新版时才提示(self) -> None:
-        upgrade.write_cache("v0.3.0")
-        self.assertEqual(upgrade.cached_newer(), "v0.3.0")
+        upgrade.write_cache("v0.9.9")
+        self.assertEqual(upgrade.cached_newer(), "v0.9.9")
         upgrade.write_cache("v0.1.0")  # 比本机旧
         self.assertIsNone(upgrade.cached_newer())
 
@@ -452,7 +452,7 @@ class CacheTest(unittest.TestCase):
 
     def test_status_不因缓存过期去联网(self) -> None:
         """过期就该当不知道——`status` 一下网络请求都不许发。"""
-        upgrade.write_cache("v0.3.0")
+        upgrade.write_cache("v0.9.9")
         old = json.loads(self.cache.read_text())
         old["checked_at"] = time.time() - upgrade.CACHE_TTL - 1
         self.cache.write_text(json.dumps(old))

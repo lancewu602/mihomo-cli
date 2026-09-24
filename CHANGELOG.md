@@ -6,7 +6,7 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。每一项都写「对外行为变了什么」，
 而不是「改了哪个文件」——设计取舍与取舍背后的理由在 `docs/` 里。
 
-## [未发布]
+## [0.3.0] - 2026-09-24
 
 ### 新增
 
@@ -244,5 +244,6 @@
 - 不做旧版本兼容：删掉的命令名（`proxy` / `kernel` / `restart` / `config default` 等）
   直接是 argparse 的 invalid choice，旧配置里的 `sub:` 也不会被认成本工具的订阅。
 
-[未发布]: https://github.com/lancewu602/mihomo-cli/compare/v0.2.2...HEAD
+[0.3.0]: https://github.com/lancewu602/mihomo-cli/compare/v0.2.2...v0.3.0
+[未发布]: https://github.com/lancewu602/mihomo-cli/compare/v0.3.0...HEAD
 [0.1.0]: https://github.com/lancewu602/mihomo-cli/releases/tag/v0.1.0
