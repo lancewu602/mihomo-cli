@@ -57,6 +57,7 @@ SUB_NAME = "airport"  # 唯一的订阅名，同时是 provider 名和组里 `us
 SUB_FILE = f"./providers/{SUB_NAME}.yaml"  # 缓存文件，相对内核的 -d 目录（就是 MIHOMO_DIR）
 SUB_INTERVAL = 3600  # 内核自动刷新的间隔（秒）；sub update 是不等它的那条捷径
 SUB_HEALTH_INTERVAL = 300  # 健康检查（测延迟）间隔
+SUB_TEST_TIMEOUT = 90.0  # sub test 同步等内核测完整个 provider 的超时
 SUB_UA = "clash-verge/v2.4.7"  # 机场普遍按 UA 发配置，用个常见客户端的，别拿 python-urllib
 SUB_TIMEOUT = 15.0  # 设置时预探测的超时
 SUB_MAX_BYTES = 16 * 1024 * 1024  # 预探测的读取上限，防呆
@@ -1205,6 +1206,7 @@ def cmd_sub(args: argparse.Namespace) -> int:
         "update": cmd_sub_update,
         "show": cmd_sub_show,
         "nodes": cmd_sub_nodes,
+        "test": cmd_sub_test,
         "use": cmd_sub_use,
     }[action](args)
 
@@ -1263,31 +1265,19 @@ def _nodes_of(name: str, by_delay: bool) -> list[dict]:
     return nodes
 
 
-def cmd_sub_nodes(args: argparse.Namespace) -> int:
-    """列当前订阅的节点：序号 / 名字 / 类型 / 延迟 / 是否存活。
+def _render_nodes(nodes: list[dict], title: str, by_delay: bool) -> None:
+    """节点表格：序号 / 名字 / 类型 / 延迟，`●` 标当前出口。`sub nodes` 与 `sub test` 共用。
 
-    序号是 `sub use <序号>` 用的那个（默认跟订阅原顺序一致，跟面板看到的一样；
-    `--delay` 则按延迟排）。节点数据**只知道接口要**（`GET /providers/proxies/airport`），
-    不去解析订阅内容：订阅是内核拉的，节点名、类型、测速历史都在它内存里（本地那份缓存是
-    机场原样发的 base64，本工具刻意不解析它）。代价是内核没跑时看不到名单——那时给的是为什么。
+    序号是 `sub use <序号>` 用的那个——两个命令必须同一套顺序，否则「看着 12 号切了 3 号」
+    是必然发生的。顺序由调用方的 `_nodes_of()` 定，这里只负责打印（并标出当前出口、按顺序
+    给对 `--delay` 提示，免得按这张表数出来的序号拿去 `sub use` 时数错）。
     """
-    cfg = require_config()
-    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
-    prov = _our_provider(lines)
-    if prov is None:
-        die("还没设过订阅。先来一条：mihomo-cli sub set <订阅链接>")
-    name = prov["name"]
-    nodes = _nodes_of(name, args.delay)
-    if not nodes:
-        print(warn(f"内核说订阅 {name} 里一个节点都没有（订阅过期了？mihomo-cli sub show 看看）"))
-        return 1
-
     # 当前出口（穿透两层组）：标出正在用的那个，其余都是候选
     chain = current_node()
     active = _display_name(chain[0][-1]) if chain else None
-    print(dim(f"mihomo  /  {name}  {len(nodes)} 个节点{'（按延迟排）' if args.delay else ''}"))
     w = min(max(width(n["name"]) for n in nodes), 40)
     num_w = len(str(len(nodes)))
+    print(dim(title))
     for i, n in enumerate(nodes, 1):
         here = n["name"] == active
         label = _clip(n["name"], w)
@@ -1299,10 +1289,84 @@ def cmd_sub_nodes(args: argparse.Namespace) -> int:
         if not n["alive"]:
             print(warn("      这个节点当前不可用"))
     delays = [n["delay"] for n in nodes if n["delay"]]
+    hint = "；● 是当前出口。指定节点：mihomo-cli sub use <序号>"
+    hint += " --delay" if by_delay else ""  # 序号按这张表的顺序数
     print(
         dim(f"  共 {len(nodes)} 个：{len(delays)} 个有延迟数据")
         + (dim(f"，最快 {min(delays)}ms") if delays else "")
-        + dim("；● 是当前出口。指定节点：mihomo-cli sub use <序号>；回到自动：sub use --auto")
+        + dim(hint + "；回到自动：sub use --auto")
+    )
+
+
+def cmd_sub_nodes(args: argparse.Namespace) -> int:
+    """列当前订阅的节点：序号 / 名字 / 类型 / 延迟 / 是否存活。
+
+    序号是 `sub use <序号>` 用的那个（默认跟订阅原顺序一致，跟面板看到的一样；
+    `--delay` 则按延迟排）。节点数据**只知道接口要**（`GET /providers/proxies/airport`），
+    不去解析订阅内容：订阅是内核拉的，节点名、类型、测速历史都在它内存里（本地那份缓存是
+    机场原样发的 base64，本工具刻意不解析它）。代价是内核没跑时看不到名单——那时给的是为什么。
+
+    这里的延迟是内核**最近一次**测速的结果（provider 的 health-check 历史），不一定新鲜；
+    想现在测一轮用 `sub test`。
+    """
+    cfg = require_config()
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    prov = _our_provider(lines)
+    if prov is None:
+        die("还没设过订阅。先来一条：mihomo-cli sub set <订阅链接>")
+    name = prov["name"]
+    nodes = _nodes_of(name, args.delay)
+    if not nodes:
+        print(warn(f"内核说订阅 {name} 里一个节点都没有（订阅过期了？mihomo-cli sub show 看看）"))
+        return 1
+    _render_nodes(
+        nodes,
+        f"mihomo  /  {name}  {len(nodes)} 个节点{'（按延迟排）' if args.delay else ''}",
+        by_delay=args.delay,
+    )
+    return 0
+
+
+def cmd_sub_test(_: argparse.Namespace) -> int:
+    """手动触发一次测速：让内核当场把订阅里的每个节点都测一遍，再按延迟排出来。
+
+    打的是 `GET /providers/proxies/{名}/healthcheck`——一个**同步**请求：内核把 provider 里
+    所有节点测完才回 204，结果直接落进 provider 的测速历史（`sub nodes` 读的就是它）。
+
+    为什么不逐个节点打 `GET /proxies/{名}/delay`：1.19.26 起订阅节点不再出现在 `/proxies`
+    里（实测 `/proxies/<订阅节点>/delay` 是 404），逐个测对订阅根本不成立。provider 级健康检查
+    一次测全部，而且用的是 provider 自己配的 `health-check` 地址与超时——跟 url-test 组挑节点
+    是同一把尺子。
+
+    只测、不切：序号跟 `sub nodes` 完全一致（这里按延迟排，所以提示带 `--delay`），想切再用
+    `sub use <序号> --delay`。
+    """
+    cfg = require_config()
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    prov = _our_provider(lines)
+    if prov is None:
+        die("还没设过订阅。先来一条：mihomo-cli sub set <订阅链接>")
+    name = prov["name"]
+    print(dim(f"正在测速：{name} 的所有节点，最多等 {SUB_TEST_TIMEOUT:.0f} 秒…"))
+    code, _ = api_raw(
+        f"/providers/proxies/{urllib.parse.quote(name, safe='')}/healthcheck",
+        timeout=SUB_TEST_TIMEOUT,
+    )
+    if code == 0:
+        die("测速失败：控制接口连不上（内核没在跑？）。\n  先把内核起起来：mihomo-cli start")
+    if code == 404:
+        die(
+            f"测速失败：内核里没有这个订阅（{name}）——改完配置还没重启过？\n"
+            f"  重启一下：{RESTART_HINT}"
+        )
+    if not 200 <= code < 300:
+        die(f"测速失败：控制接口回了 HTTP {code}")
+    nodes = _nodes_of(name, by_delay=True)
+    if not nodes:
+        print(warn(f"内核说订阅 {name} 里一个节点都没有（订阅过期了？mihomo-cli sub show 看看）"))
+        return 1
+    _render_nodes(
+        nodes, f"mihomo  /  {name}  {len(nodes)} 个节点（刚测速，按延迟排）", by_delay=True
     )
     return 0
 

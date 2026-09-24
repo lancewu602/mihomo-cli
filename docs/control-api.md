@@ -16,7 +16,7 @@
 | 读 | `GET /configs`、`GET /rules`、`GET /connections` | 运行配置、规则表、活跃连接 |
 | 读 | `GET /traffic`、`GET /logs` | 流量/内存统计、日志流 |
 | 写 | `PUT /proxies/{组名}` | 切换选中节点。立刻生效，**只进内核缓存，不写 config.yaml** |
-| 写 | `GET /proxies/{节点}/delay`、`GET /group/{组}/delay`、`GET {组}/healthcheck` | 测速 |
+| 写 | `GET /proxies/{节点}/delay`、`GET /group/{组}/delay`、`GET /providers/proxies/{名}/healthcheck` | 测速（`{组}/healthcheck` 在 1.19.31 上是 404，别用） |
 | 写 | `PUT /providers/proxies/{名}` | 让内核当场重拉这个订阅 |
 | 写 | `PUT /configs?force=true` | 热重载配置文件（本工具不用，见下） |
 | 写 | `PATCH /configs` | 改运行中的全局设置：`mode` / `log-level` / `allow-lan`（`config` 命令；**不落盘**） |
@@ -43,13 +43,15 @@
 | 代码位置 | 调用 | 干什么 |
 |---|---|---|
 | `src/mihomo_cli/status.py:130` | `GET /version` | 判断控制接口可用 |
-| `src/mihomo_cli/kernel.py:66` / `:87` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
-| `src/mihomo_cli/kernel.py:114` / `:103` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
-| `src/mihomo_cli/subs.py:971` / `:968` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+| `src/mihomo_cli/kernel.py:66` / `:88` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
+| `src/mihomo_cli/kernel.py:114` / `:104` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
+| `src/mihomo_cli/subs.py:972` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
 
-写接口两个：`src/mihomo_cli/subs.py:1011` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+写接口三个：`src/mihomo_cli/subs.py:1008` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
 以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`；
-以及 `src/mihomo_cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
+`src/mihomo_cli/subs.py:1330` 的 **`GET /providers/proxies/{名}/healthcheck`**（`sub test`）——
+让内核当场把 provider 里所有节点测一遍（同步请求，返回 `204` 时全部测完，结果进 provider 的
+测速历史）；以及 `src/mihomo_cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
 
 ### `config`：`PATCH /configs` 改运行时的全局设置
 
@@ -89,6 +91,11 @@
   （实测：`proxy-providers` 没写 `proxy: DIRECT` 时，这个请求走的是内部分流、进了隧道，
   隧道第一跳是个坏节点就 503）。
   `src/mihomo_cli/subs.py` 把这两种分开提示，再降级成「删缓存 + 重启内核」。
+- **订阅节点测不了单点延迟**：mihomo 1.19.26 起订阅节点不在 `/proxies` 里，
+  `GET /proxies/<订阅节点>/delay` 实测 404（只有 `GET /proxies/DIRECT/delay` 这类非订阅节点才
+  200）；`GET {组}/healthcheck` 在 1.19.31 上也是 404。给整个订阅测速要走 provider 级的
+  `GET /providers/proxies/{名}/healthcheck`（`sub test`），它同步把全部节点测完（实测 49 个节点
+  约 8 秒），或者用 `GET /group/{组}/delay` 拿一份即时的延迟表。
 - **`external-controller` 没配或端口错了**，症状是“进程在、端口在监听、但接口读不到”。
   `status` 会把这两种情况分开显示（代理端口 vs 控制接口），别混着看。前一种在默认安装上
   是常态：内核默认不监听，`core.py` 那个 `127.0.0.1:9090` 兜底只在“内核真监听了这个端口”

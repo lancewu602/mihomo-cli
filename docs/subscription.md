@@ -13,6 +13,7 @@
 | `sub update` | 让内核当场重拉节点（跟上一行的差别只是不接受链接参数） | 不碰 |
 | `sub show` | 链接 / 缓存文件 / 挂在哪个组 / 内核那边多少节点 | 不碰 |
 | `sub nodes [--delay]` | 列节点：序号 / 名字 / 类型 / 延迟 / 存活，`●` 标当前出口 | 不碰 |
+| `sub test` | 手动触发一次测速：让内核当场测一遍全部节点，按延迟排（只测不切） | 不碰 |
 | `sub use <序号>` | 把出口切到这个节点（运行时，见下） | 不碰 |
 | `sub use --auto` | 切回自动选择 | 不碰 |
 
@@ -70,6 +71,24 @@ invalid choice，不给“改叫 xxx”的指路）。
 | 内核没跑 | 提示「节点只在它内存里」+ `mihomo-cli start`——不是本工具不支持，是真的没数据可读 |
 
 `--delay` 按延迟从快到慢排（没测到的排最后）；默认按订阅里的原顺序，跟面板一致。
+
+### `sub test`：手动测速（只测不切）
+
+`sub nodes` 里的延迟是内核**最近一次** health-check 的结果，不一定是刚测的。想现在测一轮：
+
+```bash
+mihomo-cli sub test
+```
+
+它打的是 `GET /providers/proxies/airport/healthcheck`——一个**同步**请求：内核把 provider 里
+所有节点测完才回 `204`，结果直接落进 provider 的测速历史（`sub nodes` 读的就是它），所以测完
+立刻按延迟从快到慢排出来。
+
+- **不逐个节点打 `/proxies/{名}/delay`**：mihomo 1.19.26 起订阅节点不再出现在 `/proxies` 里
+  （实测 `/proxies/<订阅节点>/delay` 是 404），逐个测对订阅不成立；provider 级健康检查一次测
+  全部，用的是 provider 自己配的 `health-check` 地址与超时——跟 url-test 组挑节点同一把尺子。
+- **只测、不切**：这一步不碰当前出口。测完按延迟排的序号配 `sub use <序号> --delay` 用；
+  想交给内核自己挑最快的是 `sub use --auto`（url-test 组按下一次测速的结果切换）。
 
 ### `sub use`：按序号指定节点
 

@@ -222,6 +222,9 @@ def _main(argv: list[str] | None = None) -> int:
             sn.add_argument(
                 "--delay", action="store_true", help="按延迟从快到慢排（默认按订阅原顺序）"
             )
+            ssub.add_parser(
+                "test", help="手动测速：让内核当场把每个节点测一遍，按延迟从快到慢排（只测不切）"
+            )
             su = ssub.add_parser("use", help="指定出口节点（运行时生效，不写配置）")
             su.add_argument(
                 "index", nargs="?", type=int, metavar="序号", help="节点的序号：见 sub nodes"

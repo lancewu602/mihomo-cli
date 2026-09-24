@@ -6,6 +6,20 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。每一项都写「对外行为变了什么」，
 而不是「改了哪个文件」——设计取舍与取舍背后的理由在 `docs/` 里。
 
+## [未发布]
+
+### 新增
+
+- `sub test`：手动触发一次测速。让内核当场把订阅里的每个节点都测一遍（provider 级 healthcheck，
+  同步返回时全部测完），结果直接进 provider 的测速历史，按延迟从快到慢列出来。**只测不切**：测完
+  的序号配 `sub use <序号> --delay` 用。订阅节点在新内核里不在 `/proxies` 里，逐个节点打
+  `/proxies/{名}/delay` 对订阅不成立，所以走的是 `GET /providers/proxies/{名}/healthcheck`。
+
+### 修复
+
+- `sub nodes --delay` 末尾那句「指定节点：sub use <序号>」漏了 `--delay`。按延迟排的序号直接
+  `sub use <序号>` 会按订阅原顺序数，是**切错节点**；现在按延迟排时提示会带上 `--delay`。
+
 ## [0.2.2] - 2026-09-23
 
 ### 修复
@@ -230,5 +244,5 @@
 - 不做旧版本兼容：删掉的命令名（`proxy` / `kernel` / `restart` / `config default` 等）
   直接是 argparse 的 invalid choice，旧配置里的 `sub:` 也不会被认成本工具的订阅。
 
-[未发布]: https://github.com/lancewu602/mihomo-cli/compare/v0.1.0...HEAD
+[未发布]: https://github.com/lancewu602/mihomo-cli/compare/v0.2.2...HEAD
 [0.1.0]: https://github.com/lancewu602/mihomo-cli/releases/tag/v0.1.0
