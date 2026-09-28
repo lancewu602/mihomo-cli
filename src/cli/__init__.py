@@ -28,7 +28,7 @@
 入口有两个，都落到 `cli.main()`：
 
 - 装了包：`mihomo-cli`（console script，见 pyproject.toml 的 `[project.scripts]`）
-- 不装包：`PYTHONPATH=src python3 -m mihomo_cli`，或仓库根那个 shim `./mihomo-cli`
+- 不装包：`PYTHONPATH=src python3 -m cli`，或仓库根那个 shim `./mihomo-cli`
   （它自己把 `src/` 塞进 sys.path，symlink 到 PATH 里也能用）
 
 包在 `src/` 下是故意的（src 布局）：仓库根不是 import 根，所以“在仓库里能跑”

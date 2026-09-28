@@ -6,6 +6,14 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。每一项都写「对外行为变了什么」，
 而不是「改了哪个文件」——设计取舍与取舍背后的理由在 `docs/` 里。
 
+## [未发布]
+
+### 变更
+
+- **包名（导入路径）由 `mihomo_cli` 改为 `cli`**（目录 `src/cli/`）。发行名 `mihomo-cli`、
+  命令行入口 `mihomo-cli`、以及所有命令的对外行为都不变。受影响的只有直接 `import mihomo_cli`
+  的脚本：现在写 `import cli`；不装包时的 `python3 -m mihomo_cli` 也改成 `python3 -m cli`。
+
 ## [0.3.0] - 2026-09-24
 
 ### 新增

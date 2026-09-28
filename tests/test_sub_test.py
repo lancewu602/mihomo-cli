@@ -16,7 +16,7 @@ import unittest
 from argparse import Namespace
 from unittest import mock
 
-from mihomo_cli import subs
+from cli import subs
 
 NODES = [{"name": "香港 01", "type": "ShadowsocksR", "delay": 10, "alive": True}]
 

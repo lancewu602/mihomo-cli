@@ -28,7 +28,7 @@ ONEDIR = bool(os.environ.get("MIHOMO_CLI_ONEDIR"))
 
 a = Analysis(
     ["packaging/entry.py"],
-    pathex=["src"],                 # src 布局：告诉分析器去哪儿找 mihomo_cli 包
+    pathex=["src"],                 # src 布局：告诉分析器去哪儿找 cli 包
     binaries=[],
     datas=[],
     hiddenimports=[],               # 没有动态 import/importlib，静态分析就够

@@ -19,8 +19,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from mihomo_cli import doctor
-from mihomo_cli.install import FROZEN_DIR, FROZEN_ONE, SOURCE
+from cli import doctor
+from cli.install import FROZEN_DIR, FROZEN_ONE, SOURCE
 
 LOADER = (
     "systemctl: /usr/local/libexec/mihomo-cli/_internal/libcrypto.so.3: "
@@ -38,7 +38,7 @@ def fake_run(**by_rc: subprocess.CompletedProcess):
     def _run(*cmd: str) -> subprocess.CompletedProcess:
         return by_rc.get(cmd[0], by_rc.get("default", completed()))
 
-    return mock.patch("mihomo_cli.doctor.run", side_effect=_run)
+    return mock.patch("cli.doctor.run", side_effect=_run)
 
 
 class QueryKindTest(unittest.TestCase):

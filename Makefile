@@ -20,9 +20,9 @@
 
 PREFIX ?= /usr/local
 LIBEXEC = $(PREFIX)/libexec
-# 版本号从代码里读（唯一真源是 src/mihomo_cli/_version.py），于是 make install 装出来的布局和
+# 版本号从代码里读（唯一真源是 src/cli/_version.py），于是 make install 装出来的布局和
 # 自更新（mihomo-cli upgrade）用的是同一套：<前缀>/libexec/mihomo-cli-<版本> + 一个 symlink。
-VERSION = $(shell PYTHONPATH=src python3 -c "import mihomo_cli; print(mihomo_cli.__version__)" 2>/dev/null)
+VERSION = $(shell PYTHONPATH=src python3 -c "import cli; print(cli.__version__)" 2>/dev/null)
 ENTRY   = $(LIBEXEC)/mihomo-cli-$(VERSION)
 CURRENT = $(LIBEXEC)/mihomo-cli
 WRAPPER = $(PREFIX)/bin/mihomo-cli
@@ -32,7 +32,7 @@ BUILD  ?= build
 
 ONEFILE = $(DIST)/mihomo-cli
 ONEDIR  = $(DIST)/dir/mihomo-cli/mihomo-cli
-SOURCES = $(wildcard src/mihomo_cli/*.py)
+SOURCES = $(wildcard src/cli/*.py)
 
 BIN ?= $(ONEDIR)
 
@@ -86,7 +86,7 @@ check:
 # "目录恰好不在"的窗口（实测 27 ms(Linux)/104 ms(macOS)，窗口内调用 100% 失败）。详见 docs/update.md。
 install:
 	@test -x $(BIN) || { echo "没有 $(BIN)，先 make build（或 make build-onefile）"; exit 1; }
-	@test -n "$(VERSION)" || { echo "读不出版本号（src/mihomo_cli/_version.py？）"; exit 1; }
+	@test -n "$(VERSION)" || { echo "读不出版本号（src/cli/_version.py？）"; exit 1; }
 	@mkdir -p $(PREFIX)/bin $(LIBEXEC)
 	@if [ -d "$(CURRENT)" ] && [ ! -L "$(CURRENT)" ]; then \
 		mv "$(CURRENT)" "$(LIBEXEC)/mihomo-cli-legacy-$$(date +%Y%m%d)" && \

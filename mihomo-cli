@@ -3,7 +3,7 @@
 
     ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli
 
-它只干一件事——把 `src/` 塞进 sys.path，然后交给真正的入口 `mihomo_cli.cli.main()`。
+它只干一件事——把 `src/` 塞进 sys.path，然后交给真正的入口 `cli.cli.main()`。
 
 为什么不直接 symlink 包里的文件：包内的相对 import 需要解释器以包的形式加载它
 （`__package__` 有值），直接执行文件时 `__package__` 是空的，`from .core import ...` 会炸。
@@ -18,7 +18,7 @@ import sys
 # symlink 进 PATH 时 __file__ 是链接本身，realpath 才能找到仓库的真实位置
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "src"))
 
-from mihomo_cli.cli import main        # noqa: E402  必须在 sys.path 之后才 import
+from cli.cli import main        # noqa: E402  必须在 sys.path 之后才 import
 
 if __name__ == "__main__":
     sys.exit(main())

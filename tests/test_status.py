@@ -13,7 +13,7 @@ import unittest
 from argparse import Namespace
 from unittest import mock
 
-from mihomo_cli import status
+from cli import status
 
 
 def render(cached: str | None) -> str:

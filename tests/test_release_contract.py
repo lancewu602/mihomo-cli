@@ -15,7 +15,7 @@ import re
 import unittest
 from pathlib import Path
 
-from mihomo_cli import __version__, install
+from cli import __version__, install
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
@@ -97,10 +97,10 @@ class VersionSourceTest(unittest.TestCase):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('dynamic = ["version"]', text)
         self.assertNotIn('\nversion = "', text, "[project] 里不该再有写死的 version")
-        self.assertIn('version = {attr = "mihomo_cli._version.__version__"}', text)
+        self.assertIn('version = {attr = "cli._version.__version__"}', text)
 
     def test_包属性与模块常量一致(self) -> None:
-        from mihomo_cli._version import __version__ as raw
+        from cli._version import __version__ as raw
 
         self.assertEqual(__version__, raw)
 

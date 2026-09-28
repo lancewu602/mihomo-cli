@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """mihomo-cli —— 管 mihomo：内核服务、系统代理、订阅与观测。
 
-包内入口（`mihomo_cli/cli.py`）：只管参数解析、子命令表和异常兜底，活都在各模块里。
-两个等价入口：`mihomo-cli`（装包后）/ `python3 -m mihomo_cli`（不装包）。
+包内入口（`cli/cli.py`）：只管参数解析、子命令表和异常兜底，活都在各模块里。
+两个等价入口：`mihomo-cli`（装包后）/ `python3 -m cli`（不装包）。
 
 不带参数 = status（只读）。命令面按“管哪一层”分：**内核服务**（start / stop，底层就是
 brew services / systemctl）、**系统代理**（没有单独命令，start/stop 顺带开关，macOS
@@ -189,7 +189,7 @@ def _main(argv: list[str] | None = None) -> int:
             + ("选哪张网卡：mihomo-cli nic；" if IS_MACOS else "")
             + "内核服务底层就是 brew services / systemctl，本工具只替你打这两条命令。\n"
             "订阅就一个链接（sub set / sub update）；reset 把它连同配置一起清掉。\n"
-            "完整说明见文件头 docstring（python3 -m pydoc mihomo_cli.cli）；\n"
+            "完整说明见文件头 docstring（python3 -m pydoc cli.cli）；\n"
             "设计说明在仓库 docs/（控制接口 / 订阅 / 生命周期 / 打包）。"
         ),
     )

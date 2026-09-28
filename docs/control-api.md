@@ -24,17 +24,17 @@
 
 安全上两条硬要求：**绑 `127.0.0.1`**（这接口等于内核的 root，绝不能对外），以及配 `secret`
 （之后每个请求都要带 `Authorization: Bearer <secret>`）。这个工具会自动带 token
-（`src/mihomo_cli/core.py:338` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
+（`src/cli/core.py:338` 的 `api_raw()`），所以只要 config.yaml 里写了 `secret`，用户不用自己操心。
 
 ## 本项目用了哪些端点
 
 出口就三个封装：
 
-- `src/mihomo_cli/core.py:338` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
+- `src/cli/core.py:338` **`api_raw(path, method, payload, timeout)`** → `(状态码, JSON|None)`，连不上时状态码 `0`。
   必须保留状态码：有些接口失败内核回 `4xx` 加一句 message，跟“内核没起来”（`0`）不是一回事。
-- `src/mihomo_cli/core.py:365` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
+- `src/cli/core.py:365` **`api(path)`** → 只要 `200`，其余（含所有异常）一律 `None`。
   降级约定：status 在内核没起来时不崩，只显示“读不到”。
-- `src/mihomo_cli/core.py:371` **`controller_put(path, timeout)`** → 发一个 PUT，只回状态码（连不上给 `0`）。
+- `src/cli/core.py:371` **`controller_put(path, timeout)`** → 发一个 PUT，只回状态码（连不上给 `0`）。
   它是唯一会改运行中内核状态的 PUT 封装，目前只有 `sub update`（和 `sub set` 碰到“链接没变”
   时）走它；其余两个写口（`PUT /proxies/{组}`、`PATCH /configs`）直接调 `api_raw()`。
 
@@ -42,16 +42,16 @@
 
 | 代码位置 | 调用 | 干什么 |
 |---|---|---|
-| `src/mihomo_cli/status.py:130` | `GET /version` | 判断控制接口可用 |
-| `src/mihomo_cli/kernel.py:66` / `:88` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
-| `src/mihomo_cli/kernel.py:114` / `:104` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
-| `src/mihomo_cli/subs.py:972` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
+| `src/cli/status.py:130` | `GET /version` | 判断控制接口可用 |
+| `src/cli/kernel.py:66` / `:88` | `GET /providers/proxies[/{名}]` | 订阅节点的归属与测速历史（1.19.26 起订阅节点不在 `/proxies` 里） |
+| `src/cli/kernel.py:114` / `:104` | `GET /proxies[/{名}]` | 当前出口链路、节点与组的延迟 |
+| `src/cli/subs.py:972` | `GET /providers/proxies/{名}` | `sub show` 与刷新后的回显：节点数、上次更新时间 |
 
-写接口三个：`src/mihomo_cli/subs.py:1008` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
+写接口三个：`src/cli/subs.py:1008` 的 **`PUT /providers/proxies/{名}`**（`sub update`，
 以及 `sub set` 碰到“链接没变”时）——让内核当场重拉订阅，不等 `interval`；
-`src/mihomo_cli/subs.py:1330` 的 **`GET /providers/proxies/{名}/healthcheck`**（`sub test`）——
+`src/cli/subs.py:1330` 的 **`GET /providers/proxies/{名}/healthcheck`**（`sub test`）——
 让内核当场把 provider 里所有节点测一遍（同步请求，返回 `204` 时全部测完，结果进 provider 的
-测速历史）；以及 `src/mihomo_cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
+测速历史）；以及 `src/cli/config.py:160` 的 **`PATCH /configs`**（`config` 命令），见下一节。
 
 ### `config`：`PATCH /configs` 改运行时的全局设置
 
@@ -90,7 +90,7 @@
 - **`PUT /providers/proxies/{名}` 失败时回的是 `503`，不是 `404`**：`503` = 内核去拉了但没拉成
   （实测：`proxy-providers` 没写 `proxy: DIRECT` 时，这个请求走的是内部分流、进了隧道，
   隧道第一跳是个坏节点就 503）。
-  `src/mihomo_cli/subs.py` 把这两种分开提示，再降级成「删缓存 + 重启内核」。
+  `src/cli/subs.py` 把这两种分开提示，再降级成「删缓存 + 重启内核」。
 - **订阅节点测不了单点延迟**：mihomo 1.19.26 起订阅节点不在 `/proxies` 里，
   `GET /proxies/<订阅节点>/delay` 实测 404（只有 `GET /proxies/DIRECT/delay` 这类非订阅节点才
   200）；`GET {组}/healthcheck` 在 1.19.31 上也是 404。给整个订阅测速要走 provider 级的

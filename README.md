@@ -102,7 +102,7 @@ uv tool install -e .
 
 # 不装包管理器：symlink 仓库根的 shim（包内文件不能直接 symlink，原因见 docs/packaging.md）
 ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli
-PYTHONPATH=src python3 -m mihomo_cli status   # 什么也不装，在仓库目录里就能跑
+PYTHONPATH=src python3 -m cli status   # 什么也不装，在仓库目录里就能跑
 ```
 
 ### mihomo 本体
@@ -266,8 +266,8 @@ site-packages，也不替你做 `git pull`）。设计与取舍见 [docs/update.
 
 ## 开发
 
-源码是 src 布局下的真包（`src/mihomo_cli/`，包内一律相对 import）：新增模块直接往包里放，
-没有清单要维护；入口是 `mihomo_cli.cli:main`。为什么要多一层 `src/`、代价是什么，
+源码是 src 布局下的真包（`src/cli/`，包内一律相对 import）：新增模块直接往包里放，
+没有清单要维护；入口是 `cli.cli:main`。为什么要多一层 `src/`、代价是什么，
 写在 `docs/packaging.md`。
 
 ```bash

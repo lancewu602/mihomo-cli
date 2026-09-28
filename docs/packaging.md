@@ -7,7 +7,7 @@
 | **给自己/别人的机器**（目标机器没 Python 也能跑） | `make deps` → `make build` | 目录版 `dist/dir/mihomo-cli/mihomo-cli` |
 | 就想"只有一个文件" | `make build-onefile` | 单文件 `dist/mihomo-cli`（8.3 MB） |
 | 本机自用、跟着源码更新 | `uv tool install .`（或 `pipx install .`） | console script `mihomo-cli` |
-| 开发时改一行就想跑 | 仓库根 shim symlink，或 `PYTHONPATH=src python3 -m mihomo_cli` | —— |
+| 开发时改一行就想跑 | 仓库根 shim symlink，或 `PYTHONPATH=src python3 -m cli` | —— |
 
 **默认给的是目录版，不是单文件**，因为单文件每次启动都要把 ~8 MB 解包成一个新的临时
 可执行文件；在会逐个校验新可执行文件的环境里（这台 macOS 26 就是）实测每次 6 秒，
@@ -17,9 +17,9 @@
 
 ```
 src/
-    mihomo_cli/            包（pyproject: package-dir {"" = "src"}，packages = ["mihomo_cli"]）
+    cli/                包（pyproject: package-dir {"" = "src"}，packages = ["cli"]）
         __init__.py        模块分工说明（依赖方向）
-        __main__.py        python3 -m mihomo_cli 的入口，只有几行
+        __main__.py        python3 -m cli 的入口，只有几行
         cli.py             argparse / 子命令表 / 异常兜底
         core.py kernel.py status.py …    其余模块，一律相对 import
 packaging/entry.py         PyInstaller 的入口脚本（绝对 import，见下）
@@ -29,9 +29,9 @@ mihomo-cli                 仓库根的 shim：不装包时 symlink 用（它把
 docs/  README.md  pyproject.toml  MANIFEST.in
 ```
 
-- **为什么包在 `src/` 下**：让仓库根不再是 import 根。"在仓库里 `python3 -m mihomo_cli` 能跑"
+- **为什么包在 `src/` 下**：让仓库根不再是 import 根。"在仓库里 `python3 -m cli` 能跑"
   跑的是源码目录那份，打包漏文件藏不住；现在不设 `PYTHONPATH=src` 就是
-  `No module named mihomo_cli`，能跑起来的必然是装好的那份。代价是本地跑要带 `PYTHONPATH=src`。
+  `No module named cli`，能跑起来的必然是装好的那份。代价是本地跑要带 `PYTHONPATH=src`。
 - 包内一律 `from .core import ...`。**这是硬要求**：`python3 -m` 会给解释器设好 `__package__`，
   相对 import 才能解析；任何"直接执行包内某个 .py"的做法都会因为 `__package__` 为空而炸。
 
@@ -75,7 +75,7 @@ spec 里几个决定的理由（改之前先看那里的注释）：
 
 | 产物 | `--help` | `status`（真实负载） | 体积 |
 |---|---|---|---|
-| 源码 `PYTHONPATH=src python3 -m mihomo_cli` | 0.08 ~ 0.11s | 3.15s | —— |
+| 源码 `PYTHONPATH=src python3 -m cli` | 0.08 ~ 0.11s | 3.15s | —— |
 | 目录版 `make build` | 0.10 ~ 0.16s | 3.00s | 22 MB（可执行 2.0 MB + `_internal/`） |
 | 单文件 `make build-onefile` | 5.97 ~ 6.16s | 17.2s | 8.3 MB |
 
@@ -196,18 +196,18 @@ uv tool upgrade mihomo-cli        # 更新
 
 ```bash
 ln -sf "$PWD/mihomo-cli/mihomo-cli" /usr/local/bin/mihomo-cli   # 仓库根 shim
-PYTHONPATH=src python3 -m mihomo_cli status                     # 仓库目录里直接跑
+PYTHONPATH=src python3 -m cli status                     # 仓库目录里直接跑
 ```
 
 包内模块不能直接 symlink 到 PATH：相对 import 需要解释器把模块**当包加载**（`__package__`
-有值）。直接执行 `src/mihomo_cli/__main__.py` 时它是空的，`from .core import ...` 立刻报
+有值）。直接执行 `src/cli/__main__.py` 时它是空的，`from .core import ...` 立刻报
 "attempted relative import with no known parent package"。所以 shim 只做一件事：用 `realpath`
-解掉 symlink 找到仓库位置，把 **`src/`** 插进 `sys.path`，再 `from mihomo_cli.cli import main`。
+解掉 symlink 找到仓库位置，把 **`src/`** 插进 `sys.path`，再 `from cli.cli import main`。
 
 ## pyproject.toml 要点
 
-- `[project.scripts] mihomo-cli = "mihomo_cli.cli:main"`：`main(argv) -> int` 的返回值就是退出码。
-- `[tool.setuptools] package-dir = {"" = "src"}` + `packages = ["mihomo_cli"]`：src 布局的核心两行。
+- `[project.scripts] mihomo-cli = "cli.cli:main"`：`main(argv) -> int` 的返回值就是退出码。
+- `[tool.setuptools] package-dir = {"" = "src"}` + `packages = ["cli"]`：src 布局的核心两行。
   少了 `package-dir`，setuptools 会去仓库根找包，装出来的 wheel 里一个模块都没有。
 - `dependencies = []`（零第三方依赖）；`[project.optional-dependencies] build = ["pyinstaller>=6.0"]`
   只在构建二进制时用，别塞进运行时依赖。
@@ -220,7 +220,7 @@ PYTHONPATH=src python3 -m mihomo_cli status                     # 仓库目录�
 `pip`/`uv` 生成的入口脚本是裸的 `sys.exit(main())`，跟 `__main__.py` 里那段**不是同一段代码**。
 所以 `KeyboardInterrupt` / `BrokenPipeError` 的兜底如果只写在 `if __name__ == "__main__":` 里，
 装成命令后就全部失效——实测症状：`mihomo-cli status | head -5` 喷一屏 `BrokenPipeError` 回溯
-（直跑脚本却没事，很容易漏测）。现在兜底统一在 `mihomo_cli/cli.py` 的 `main()` 里（`_main()`
+（直跑脚本却没事，很容易漏测）。现在兜底统一在 `cli/cli.py` 的 `main()` 里（`_main()`
 干正事），二进制版走同一个入口，所以同样受益。
 
 ## 怎么验
@@ -237,7 +237,7 @@ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin ./dist/dir/mihomo-cli/mihomo-cli statu
 cp -R dist/dir/mihomo-cli /tmp/x && /tmp/x/mihomo-cli --help
 
 # 本机源码版回归
-PYTHONPATH=src python3 -m mihomo_cli status | head -4
+PYTHONPATH=src python3 -m cli status | head -4
 ```
 
 **冻结版最该盯的是「子进程有没有被包里的库带歪」**（它只在运行时、只在目标机器上才现形）：

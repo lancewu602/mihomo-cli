@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mihomo-cli"
 # 版本号不写在这里：写在这儿就会出现"装的是 A、自报是 B"（CI 的 tag 闸门只查得到其中一个）。
-# 唯一真源是 src/mihomo_cli/_version.py，下面 [tool.setuptools.dynamic] 静态解析它——
+# 唯一真源是 src/cli/_version.py，下面 [tool.setuptools.dynamic] 静态解析它——
 # 构建期不 import 包，pip / uv / PyInstaller / CI 四条路读到的是同一个值。
 # 发版规矩：tag = `v` + 那个值（CI 会拦）。
 dynamic = ["version"]
@@ -34,18 +34,18 @@ build = ["pyinstaller>=6.0"]
 Homepage = "https://github.com/lancewu602/mihomo-cli"
 
 [project.scripts]
-mihomo-cli = "mihomo_cli.cli:main"
+mihomo-cli = "cli.cli:main"
 
-# 真的包目录，不是平铺模块：新增模块直接往 src/mihomo_cli/ 里放、用相对 import 就完事，
+# 真的包目录，不是平铺模块：新增模块直接往 src/cli/ 里放、用相对 import 就完事，
 # 不用再维护模块清单（平铺布局那个 py-modules 清单漏一个就 ImportError）。
 # src 布局：包在 src/ 下，仓库根不是 import 根 —— 在仓库里能跑起来的，只可能是装好的那份，
 # 这样“本地能跑、装完缺文件”才藏不住。
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["mihomo_cli"]
+packages = ["cli"]
 
 [tool.setuptools.dynamic]
-version = {attr = "mihomo_cli._version.__version__"}
+version = {attr = "cli._version.__version__"}
 
 # 文档跟着包走：装到 <前缀>/share/doc/mihomo-cli/。
 # 分两个键是故意的：data-files 会扁平化，docs/README.md 跟仓库 README.md 同名，

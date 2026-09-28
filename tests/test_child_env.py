@@ -15,7 +15,7 @@ import sys
 import unittest
 from unittest import mock
 
-from mihomo_cli import core
+from cli import core
 
 BUNDLE = "/usr/local/libexec/mihomo-cli/_internal"
 USER_PATH = "/opt/my-own-libs"

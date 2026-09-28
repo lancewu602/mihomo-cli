@@ -26,7 +26,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from mihomo_cli import install, upgrade
+from cli import install, upgrade
 
 # 假的二进制：够 smoke() 用（先问 --version、再跑 doctor）
 FAKE_BIN = """#!/bin/sh

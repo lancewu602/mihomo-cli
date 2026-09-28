@@ -50,7 +50,7 @@ def install_kind() -> str:
     """认出这份工具是怎么装进来的。
 
     判定顺序是故意这样的：**先看代码自己住在哪，再看有没有发行版记录**。反过来会误判——
-    本仓库 `pip install -e .`（或构建过）会留下 `src/mihomo_cli.egg-info`，`importlib.metadata`
+    本仓库 `pip install -e .`（或构建过）会留下 `src/cli.egg-info`，`importlib.metadata`
     就找得到一份 dist-info，于是一个纯源码 checkout 会被报成"pip 装的"，然后 `upgrade` 给人
     一句错的升级建议（`pip install -U`）——它该说的是 `git pull`。
 
@@ -59,7 +59,7 @@ def install_kind() -> str:
     if IS_FROZEN:
         # 目录版的可执行文件旁边有个 _internal/（单文件版每次解包到临时目录，旁边没有）
         return FROZEN_DIR if (Path(sys.executable).parent / "_internal").is_dir() else FROZEN_ONE
-    if (Path(__file__).resolve().parents[2] / ".git").exists():  # …/<仓库>/src/mihomo_cli/
+    if (Path(__file__).resolve().parents[2] / ".git").exists():  # …/<仓库>/src/cli/
         return SOURCE
     try:
         dist = importlib.metadata.distribution("mihomo-cli")

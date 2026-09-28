@@ -37,16 +37,16 @@
   （内含五个分组：内核与系统代理 / 订阅 / 自定义分流规则 / 全局设置 / 观测）。
 - 改了控制接口端点或新增端点，同步改 `control-api.md` 里那张"本项目用了哪些"的表
   （带 `文件:行号`，改了要一起更新）。
-- 新增模块：直接放进 `src/mihomo_cli/`、用相对 import（`from .core import ...`），
-  **没有模块清单要维护**。包清单是 `package-dir {"" = "src"}` + `packages = ["mihomo_cli"]`，整个包一起走。
-  二进制构建也不用改：`mihomo-cli.spec` 与 `Makefile` 关心的是入口和 `src/mihomo_cli/*.py` 通配。
+- 新增模块：直接放进 `src/cli/`、用相对 import（`from .core import ...`），
+  **没有模块清单要维护**。包清单是 `package-dir {"" = "src"}` + `packages = ["cli"]`，整个包一起走。
+  二进制构建也不用改：`mihomo-cli.spec` 与 `Makefile` 关心的是入口和 `src/cli/*.py` 通配。
 - 换了入口函数（`cli.main` 改名之类）：`pyproject.toml` 的 `[project.scripts]` 与 `packaging/entry.py` 一起改。
 - 加/减发布目标平台：改 `.github/workflows/release.yml` 的 `matrix.include`（一行一个平台：
   `os` + 产物后缀），并同步 `packaging.md` 的「CI 出二进制」那节。注意 Linux 要固定在够老的
   发行版上构建（glibc 向下兼容），macOS 是「在哪种架构上构建就得到哪种二进制」。
 - 新增对外部命令的依赖（比如又调了个 `ip` / `iptables`）：`packaging.md` 里"二进制里只有这个 CLI"
   那节要补一句——那些命令不会被打进二进制。
-- 包内不要"直接执行某个 .py"来跑入口（相对 import 会失败），要么 `PYTHONPATH=src python3 -m mihomo_cli`，
-  要么用仓库根的 `mihomo-cli` shim。新入口的异常兜底放在 `src/mihomo_cli/cli.py` 的 `main()` 里。
+- 包内不要"直接执行某个 .py"来跑入口（相对 import 会失败），要么 `PYTHONPATH=src python3 -m cli`，
+  要么用仓库根的 `mihomo-cli` shim。新入口的异常兜底放在 `src/cli/cli.py` 的 `main()` 里。
 - 这里只写依然成立的结论；被推翻的方案（比如试过但放弃的）也写清楚**为什么**放弃，
   免得下一个人再走一遍。

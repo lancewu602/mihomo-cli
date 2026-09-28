@@ -34,8 +34,8 @@ doctor                  环境自检：外部命令可不可用、包完不完�
 所以第一步是把版本号落到代码里：
 
 - `pyproject.toml` 的静态 `version` 改成 `dynamic = ["version"]` +
-  `[tool.setuptools.dynamic] version = {attr = "mihomo_cli.__version__"}`，让
-  `src/mihomo_cli/_version.py` 成为**唯一真源**。四条路读的是同一个值：pip 装、uv 装、
+  `[tool.setuptools.dynamic] version = {attr = "cli.__version__"}`，让
+  `src/cli/_version.py` 成为**唯一真源**。四条路读的是同一个值：pip 装、uv 装、
   PyInstaller 冻结、源码直接跑。冻结这条尤其省事——`_version.py` 本来就在包里，是个普通模块，
   **`mihomo-cli.spec` 一行都不用改**（不需要 `copy_metadata` 去搬 dist-info）。
 - **CI 加一道闸：tag 必须等于 `__version__`，不等就让 release 失败。** 2026-09-23 那次教训正是
