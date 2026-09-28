@@ -25,7 +25,7 @@ from .core import (
     size_str,
     warn,
 )
-from .kernel import mihomo_pid
+from .kernel import brew_plists, mihomo_pid
 
 
 def find_log_file() -> tuple[Path | None, str]:
@@ -50,8 +50,7 @@ def find_log_file() -> tuple[Path | None, str]:
         p = run("systemctl", "show", "-p", "StandardOutput", "-p", "StandardError", SERVICE_NAME)
         for m in re.finditer(r"^Standard(?:Output|Error)=append:(.+)$", p.stdout, re.M):
             return Path(m.group(1).strip()), "systemd unit 的输出重定向"
-    plist = Path.home() / "Library/LaunchAgents/homebrew.mxcl.mihomo.plist"
-    if plist.exists():
+    for plist in brew_plists():  # 用户级 / 系统级、新旧命名都可能在（见 kernel.BREW_LABELS）
         m = re.search(
             r"<key>StandardOutPath</key>\s*<string>([^<]+)</string>",
             plist.read_text(errors="replace"),

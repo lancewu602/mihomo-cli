@@ -175,11 +175,43 @@ def probe(port: int) -> tuple[bool, str]:
 # 注意别为了拿状态去跑 `brew services list`（1.8s，它把**所有**服务都查一遍再格式化）；
 # 我们要的只是内核这一个 job，launchctl 一问就有（0.01s，实测快 180 倍）。
 
-BREW_LABEL = "homebrew.mxcl.mihomo"  # brew services 给内核起的 job 名
-BREW_PLISTS = (  # 用户级（brew services）与系统级（sudo brew services）
-    Path.home() / f"Library/LaunchAgents/{BREW_LABEL}.plist",
-    Path(f"/Library/LaunchDaemons/{BREW_LABEL}.plist"),
+# brew services 给内核起的 job 名。**这个前缀 Homebrew 改过一次**，两种都得认：
+#   homebrew.mxcl.<名>  Homebrew 4.x 之前的写法（还散见于旧文档）
+#   sh.brew.<名>        现在（brew 4.6+ 起 plist / job 都叫这个）
+# 只认旧名的代价是实打实的：内核明明在跑，status 却报「已停止  brew services」——
+# `brew services list` 说 started，而 launchctl print 拿旧名一问 Bad request。
+BREW_LABELS = ("sh.brew.mihomo", "homebrew.mxcl.mihomo")
+BREW_DIRS = (  # 用户级（brew services）与系统级（sudo brew services）
+    Path.home() / "Library/LaunchAgents",
+    Path("/Library/LaunchDaemons"),
 )
+
+
+def _brew_labels() -> list[str]:
+    """launchd job 可能叫的所有名字：两种已知命名 + 盘上实际存在的 plist 名。
+
+    扫盘是为了**别再被第三次改名坑到**：plist 叫什么，加载进去的 job 就叫什么；
+    真机上调 `launchctl print gui/$(id -u)/<名>` 验的就是这个名字。
+    """
+    labels = list(BREW_LABELS)
+    for d in BREW_DIRS:
+        if d.is_dir():
+            labels += [p.stem for p in d.glob("*.mihomo.plist") if p.stem not in labels]
+    return labels
+
+
+def brew_plists() -> list[Path]:
+    """内核这个 brew service 的 plist，**只给盘上真存在的那些**（可能一个也没有）。
+
+    `logs.find_log_file()` 靠它读 stdout 重定向到哪，`brew_service_state()` 靠它区分
+    「装了没起」与「压根没装」——两处都得跟着命名变，所以只在这一个地方认名字。
+    """
+    return [
+        d / f"{label}.plist"
+        for label in _brew_labels()
+        for d in BREW_DIRS
+        if (d / f"{label}.plist").exists()
+    ]
 
 
 def _brew_state_from_list() -> str:
@@ -216,11 +248,20 @@ def brew_service_state() -> str:
     """
     if shutil.which("launchctl"):  # 正常路径：0.01s
         uid = os.getuid()
-        for domain in (f"gui/{uid}", "system"):  # 用户级；sudo brew services 装在 system
-            p = run("launchctl", "print", f"{domain}/{BREW_LABEL}")
-            if p.returncode == 0:
-                return "running" if re.search(r"^\s*state = running", p.stdout, re.M) else "error"
-        return "stopped" if any(plist.exists() for plist in BREW_PLISTS) else "none"
+        labels = _brew_labels()
+        loaded_error = False
+        for label in labels:
+            for domain in (f"gui/{uid}", "system"):  # 用户级；sudo brew services 装在 system
+                p = run("launchctl", "print", f"{domain}/{label}")
+                if p.returncode != 0:
+                    continue
+                if re.search(r"^\s*state = running", p.stdout, re.M):
+                    return "running"
+                loaded_error = True
+        if loaded_error:
+            return "error"
+        # 没加载但 plist 在，就是「装了没起」；一个 plist 都没有才是「压根没装」
+        return "stopped" if brew_plists() else "none"
     return _brew_state_from_list()  # 没有 launchctl 的怪环境，退回慢的那条
 
 

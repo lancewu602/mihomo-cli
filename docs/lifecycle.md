@@ -13,7 +13,8 @@
 
 关键是那句话的先后：**归服务管理器管，不等于工具不能替你打那条命令**。
 
-- macOS：`brew services start|stop`（launchd plist 在 `~/Library/LaunchAgents/homebrew.mxcl.mihomo.plist`）；
+- macOS：`brew services start|stop`（launchd plist 在 `~/Library/LaunchAgents/<job 名>.plist`，
+  job 名 brew 改过一次：旧 `homebrew.mxcl.mihomo` / 新 `sh.brew.mihomo`，见 `kernel.BREW_LABELS`）；
   `sudo brew services` 装的在 `/Library/LaunchDaemons/`，那种得你自己 sudo。
 - Linux：`systemctl start|stop mihomo`（system unit 属主是 root，不加 sudo 大概率被拒）。
 
@@ -118,7 +119,7 @@ t=12.2s url-test 测完一遍，切到最快 → 日本 中继-1 优化(3x)：72
 
 | 平台 | 问谁 | 怎么问 |
 |---|---|---|
-| macOS | brew services | `launchctl print gui/<uid>/homebrew.mxcl.mihomo`（`system/<label>` 兜 sudo 装的），status 词对齐 brew：`running` / `error` / `stopped` / `none` |
+| macOS | brew services | `launchctl print gui/<uid>/<job 名>`（`system/<job 名>` 兜 sudo 装的），job 名新旧两种都试（`sh.brew.mihomo` / `homebrew.mxcl.mihomo`，见 `kernel.BREW_LABELS`），并按盘上实际的 `*.mihomo.plist` 兜底；status 词对齐 brew：`running` / `error` / `stopped` / `none` |
 | Linux | systemd | `systemctl is-active mihomo`（~15ms） |
 
 macOS 这条别改成跑 `brew services list`：它把**所有**服务都查一遍再格式化，实测 1.8s；我们要的

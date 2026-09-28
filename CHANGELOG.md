@@ -14,6 +14,13 @@
   命令行入口 `mihomo-cli`、以及所有命令的对外行为都不变。受影响的只有直接 `import mihomo_cli`
   的脚本：现在写 `import cli`；不装包时的 `python3 -m mihomo_cli` 也改成 `python3 -m cli`。
 
+### 修复
+
+- **macOS 上「内核服务」不再误报已停止**。Homebrew 把 brew services 的 job / plist 名从
+  `homebrew.mxcl.mihomo` 改成了 `sh.brew.mihomo`，而探测只认旧名：`brew services list`
+  明说 started，`status` 却报「已停止  brew services」。现在两种命名都认，并按盘上实际的
+  `*.mihomo.plist` 兜底——brew 再改名也不会再把「在跑」看成「没装」。
+
 ## [0.3.0] - 2026-09-24
 
 ### 新增
